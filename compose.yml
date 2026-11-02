@@ -3,13 +3,10 @@ services:
     build: .
     init: true
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:9222:9222"
-      - "127.0.0.1:6080:6080"
+    network_mode: host
     volumes:
       - profile:/data/profile
     shm_size: 1gb
-    privileged: true
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9222/json/version >/dev/null && curl -sf http://127.0.0.1:6080/vnc.html >/dev/null"]
       interval: 30s

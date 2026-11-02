@@ -12,7 +12,7 @@ XVFB_PID=$!
 fluxbox >/dev/null 2>&1 &
 x11vnc -display "$DISPLAY" -forever -shared -nopw -localhost -quiet &
 X11VNC_PID=$!
-websockify --web=/usr/share/novnc 6080 localhost:5900 &
+websockify --web=/usr/share/novnc 127.0.0.1:6080 localhost:5900 &
 WS_PID=$!
 
 until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.2; done
