@@ -1,10 +1,36 @@
 #!/bin/sh
 set -eu
 export DISPLAY="${DISPLAY:-:99}"
+# Software WebGL needs --enable-unsafe-swiftshader since Chrome 139.
+GL_ARGS="--disable-gpu --enable-unsafe-swiftshader"
+
+# Optional NVIDIA GPU rendering. Requires the GPU to be passed to the container
+# (see compose.gpu.yml: nvidia-container-toolkit + graphics capability).
+# GPU=auto (default) enables it when nvidia-smi sees a GPU; GPU=1/0 forces it.
+gpu=0
+case "${GPU:-auto}" in
+  1) gpu=1 ;;
+  auto)
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+      gpu=1
+    fi
+    ;;
+  0) ;;
+  *) echo "GPU must be 0, 1 or auto" >&2; exit 1 ;;
+esac
+if [ "$gpu" = 1 ]; then
+  # NVIDIA EGL/GLX cannot run on Xvfb, but the Vulkan backend renders on the GPU
+  # and blits the result into the Xvfb framebuffer, so noVNC shows it as before.
+  # Flag set: developer.chrome.com "Supercharge Web AI model testing".
+  echo "[gpu] $(nvidia-smi -L 2>/dev/null || true)"
+  GL_ARGS="--use-angle=vulkan --enable-features=Vulkan --disable-vulkan-surface \
+--ignore-gpu-blocklist --enable-unsafe-webgpu"
+fi
+
 CHROME_ARGS="--user-data-dir=/data/profile \
 --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 \
 --no-first-run --no-default-browser-check --no-sandbox --test-type \
---disable-gpu --start-maximized about:blank"
+--start-maximized $GL_ARGS about:blank"
 
 rm -f /tmp/.X99-lock
 Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp &
