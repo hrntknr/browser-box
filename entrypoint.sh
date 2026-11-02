@@ -19,6 +19,7 @@ until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.2; done
 
 apt-get update -qq
 npx --yes playwright install chrome
+rm -f /data/profile/Singleton*
 google-chrome-stable $CHROME_ARGS &
 
 while :; do
