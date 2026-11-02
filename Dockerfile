@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Tokyo
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg locales \
+      ca-certificates curl gnupg locales dbus dbus-x11 \
       xvfb fluxbox x11vnc novnc websockify \
       fonts-noto-cjk fonts-vlgothic fonts-ipafont \
       xclip procps nodejs npm \
