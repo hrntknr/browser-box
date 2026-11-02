@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen \
     && ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
     && rm -rf /var/lib/apt/lists/* \
-    && printf '<!doctype html><meta http-equiv="refresh" content="0; url=vnc.html?autoconnect=1">\n' \
+    && printf '<!doctype html><meta http-equiv="refresh" content="0; url=vnc.html?autoconnect=1&resize=scale">\n' \
        > /usr/share/novnc/index.html
 
 RUN mkdir -p /data/profile/Default \
