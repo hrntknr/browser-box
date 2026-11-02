@@ -1,0 +1,9 @@
+node_modules/
+artifacts/
+data/
+.opencode/
+.git/
+package.json
+package-lock.json
+renovate.json
+examples/

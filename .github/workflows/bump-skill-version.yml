@@ -1,0 +1,24 @@
+name: bump-skill-version
+on:
+  push:
+    branches: [main]
+    paths:
+      - .opencode/skills/browser-box/SKILL.md
+permissions:
+  contents: write
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: set version to content hash
+        run: |
+          v="$(sha256sum .opencode/skills/browser-box/SKILL.md | cut -c1-8)"
+          if [ "$(jq -r '.skills[0].version' .opencode/skills/index.json)" != "$v" ]; then
+            jq --arg v "$v" '.skills[0].version = $v' .opencode/skills/index.json > tmp.json
+            mv tmp.json .opencode/skills/index.json
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: bump skill catalog version"
+            git push
+          fi

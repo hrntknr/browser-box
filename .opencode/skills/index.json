@@ -1,0 +1,9 @@
+{
+  "skills": [
+    {
+      "name": "browser-box",
+      "version": "1",
+      "files": ["SKILL.md"]
+    }
+  ]
+}

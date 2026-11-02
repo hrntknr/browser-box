@@ -1,0 +1,20 @@
+services:
+  box:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9222:9222"
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - profile:/data/profile
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9222/json/version >/dev/null && curl -sf http://127.0.0.1:6080/vnc.html >/dev/null"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 3m
+
+volumes:
+  profile:
