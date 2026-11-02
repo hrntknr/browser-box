@@ -3,7 +3,7 @@ set -eu
 export DISPLAY="${DISPLAY:-:99}"
 CHROME_ARGS="--user-data-dir=/data/profile \
 --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 \
---no-first-run --no-default-browser-check --no-sandbox \
+--no-first-run --no-default-browser-check --no-sandbox --test-type \
 --disable-gpu --start-maximized about:blank"
 
 rm -f /tmp/.X99-lock
