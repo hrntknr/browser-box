@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 box && mkdir -p /data/profile && chown -R box:box /data
+RUN mkdir -p /data/profile
 
 COPY entrypoint.sh /app/entrypoint.sh
 EXPOSE 9222 6080
