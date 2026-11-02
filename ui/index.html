@@ -2,26 +2,34 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, maximum-scale=1">
 <title>browser-box</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230b0e14'/><circle cx='8' cy='8' r='4' fill='%2358a6ff'/></svg>">
 <style>
   html, body {
     margin: 0; height: 100%; background: #0b0e14; overflow: hidden;
+    overscroll-behavior: none;
     font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif;
   }
   #screen { position: fixed; inset: 0; }
+  /* all touch handling is driven by our code and noVNC's GestureHandler */
+  #screen canvas { touch-action: none; }
+  /* noVNC watches its screen div for size changes and resets any custom
+     scale; hiding the scrollbars keeps the observed box constant so zoom
+     survives (pan still works via scrollLeft/scrollTop) */
+  #screen > div { scrollbar-width: none; }
+  #screen > div::-webkit-scrollbar { display: none; }
+
   #bar {
     position: fixed; z-index: 1; top: 14px; left: 50%; transform: translateX(-50%);
     display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    box-sizing: border-box; max-width: calc(100vw - 16px);
     background: rgba(22, 27, 34, .92); border: 1px solid #30363d; border-radius: 999px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, .4); backdrop-filter: blur(8px);
     transition: opacity .25s; opacity: 1;
   }
-  #bar.idle { opacity: .18; }
-  #bar:hover, #bar:focus-within { opacity: 1; }
   #state {
-    display: flex; align-items: center; gap: 7px; padding: 0 6px;
+    display: flex; align-items: center; gap: 7px; padding: 0 6px; flex: none;
     font-size: 13px; color: #c9d1d9; white-space: nowrap; user-select: none;
   }
   #dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #8b949e; }
@@ -30,32 +38,70 @@
   #bar[data-state="offline"] #dot { background: #f85149; }
   button {
     appearance: none; border: 0; border-radius: 999px; padding: 7px 14px;
-    font-size: 13px; font-weight: 600; cursor: pointer;
+    font-size: 13px; font-weight: 600; cursor: pointer; touch-action: manipulation;
+    background: rgba(255, 255, 255, .06); color: #c9d1d9;
+    white-space: nowrap; flex: none;
   }
+  button:not(:disabled):hover { background: rgba(255, 255, 255, .14); }
   button:disabled { opacity: .45; cursor: default; }
   #handover[data-mode="takeover"] { background: #d29922; color: #0b0e14; }
   #handover[data-mode="takeover"]:not(:disabled):hover { background: #e3b341; }
   #handover[data-mode="return"] { background: transparent; color: #c9d1d9; box-shadow: inset 0 0 0 1px #30363d; }
+
+  /* fade-out is hover-driven; keep the bar vivid on touch devices */
+  @media (hover: hover) and (pointer: fine) {
+    #bar.idle { opacity: .18; }
+    #bar.idle:hover, #bar.idle:focus-within { opacity: 1; }
+  }
+
+  @media (pointer: coarse) {
+    #bar { top: auto; bottom: max(14px, env(safe-area-inset-bottom)); }
+    #label { display: none; }
+    button { min-height: 44px; min-width: 44px; padding: 10px 12px; font-size: 15px; }
+  }
+  #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
+
+  /* hidden input that summons the on-screen keyboard; kept in the top band so
+     iOS never has to scroll for it while the keyboard is open */
+  #kbd-input {
+    position: fixed; top: 24px; left: 50%; width: 2px; height: 30px;
+    margin: 0; padding: 0; border: 0; opacity: 0; font-size: 16px;
+    background: transparent; color: transparent;
+  }
 </style>
 </head>
 <body>
 <div id="screen"></div>
+<input id="kbd-input" type="text" tabindex="-1"
+  autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
 <div id="bar" data-state="connecting">
   <span id="state"><span id="dot"></span><span id="label">接続中…</span></span>
+  <button id="zoom-out" title="縮小" aria-label="縮小">−</button>
+  <button id="zoom-in" title="拡大" aria-label="拡大">＋</button>
+  <button id="zoom-fit" title="全体を表示" aria-label="全体を表示">全体</button>
+  <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>キー</button>
   <button id="handover" data-mode="takeover" disabled>操作を引き継ぐ</button>
 </div>
 <script type="module">
 import RFB from "/core/rfb.js";
+import Keyboard from "/core/input/keyboard.js";
+import { getKeysym } from "/core/input/util.js";
 
 const screen = document.getElementById("screen");
 const bar = document.getElementById("bar");
 const label = document.getElementById("label");
 const handover = document.getElementById("handover");
+const kbdButton = document.getElementById("soft-keyboard");
+const kbdInput = document.getElementById("kbd-input");
+const coarse = matchMedia("(pointer: coarse)").matches;
+const MAX_ZOOM = 5;
 
 let rfb = null;
+let canvas = null;
 let manual = false;
 let online = false;
 let retryTimer = 0;
+let idleTimer = 0;
 
 function render() {
   bar.dataset.state = !online ? "offline" : manual ? "manual" : "readonly";
@@ -64,23 +110,124 @@ function render() {
     : "表示のみ — agent が操作中";
   handover.disabled = !online;
   handover.dataset.mode = manual ? "return" : "takeover";
-  handover.textContent = manual ? "agent に戻す" : "操作を引き継ぐ";
+  handover.textContent = manual
+    ? (coarse ? "戻す" : "agent に戻す")
+    : (coarse ? "引き継ぐ" : "操作を引き継ぐ");
+  kbdButton.hidden = !(manual && online) || !coarse;
+  if (!manual || !online) kbdInput.blur();
 }
 
-function connect() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  screen.replaceChildren();
-  rfb = new RFB(screen, `${proto}://${location.host}/websockify`);
-  rfb.viewOnly = !manual;
-  rfb.scaleViewport = true;
-  rfb.addEventListener("connect", () => { online = true; render(); });
-  rfb.addEventListener("disconnect", () => {
-    online = false;
-    render();
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(connect, 3000);
-  });
+// ----- viewer zoom & pan (via noVNC Display.scale so input mapping stays exact) -----
+
+function scale() { return rfb._display.scale; }
+
+function fitScale() {
+  const cont = canvas.parentElement;
+  return Math.min(cont.clientWidth / canvas.width, cont.clientHeight / canvas.height);
 }
+
+/* zoom so that the remote point under viewport (ax, ay) stays under it */
+function zoomTo(z, ax, ay) {
+  if (!canvas) return;
+  z = Math.min(z, MAX_ZOOM);
+  if (z <= fitScale() * 1.02) { rfb.scaleViewport = true; return; }
+  const cont = canvas.parentElement;
+  const old = scale();
+  const r0 = canvas.getBoundingClientRect();
+  const fx = (ax - r0.left) / old;
+  const fy = (ay - r0.top) / old;
+  if (rfb.scaleViewport) rfb.scaleViewport = false;   // reset to 1 happens here, once
+  rfb._display.scale = z;
+  const r1 = canvas.getBoundingClientRect();
+  cont.scrollLeft += r1.left - (ax - fx * z);
+  cont.scrollTop += r1.top - (ay - fy * z);
+}
+
+function zoomStep(factor) {
+  if (!canvas) return;
+  const r = canvas.parentElement.getBoundingClientRect();
+  zoomTo(scale() * factor, r.left + r.width / 2, r.top + r.height / 2);
+}
+
+document.getElementById("zoom-in").addEventListener("click", () => zoomStep(1.35));
+document.getElementById("zoom-out").addEventListener("click", () => zoomStep(1 / 1.35));
+document.getElementById("zoom-fit").addEventListener("click", () => rfb && (rfb.scaleViewport = true));
+
+// noVNC turns pinch into remote Ctrl+wheel and two-finger drag into remote
+// scroll; capture-phase lets us take those two gestures for local zoom & pan
+// while taps, drags and long-presses keep going to the remote.
+let pinchStart = null;
+let panLast = null;
+
+function onGesture(ev) {
+  const t = ev.detail.type;
+  if (t !== "pinch" && t !== "twodrag") return;
+  ev.stopImmediatePropagation();
+  if (t === "pinch") {
+    const dist = Math.hypot(ev.detail.magnitudeX, ev.detail.magnitudeY);
+    if (ev.type === "gesturestart") {
+      pinchStart = { dist: dist || 1, scale: scale() };
+    } else if (ev.type === "gesturemove" && pinchStart) {
+      zoomTo(pinchStart.scale * dist / pinchStart.dist, ev.detail.clientX, ev.detail.clientY);
+    }
+  } else if (ev.type === "gesturemove") {
+    const cont = canvas.parentElement;
+    if (panLast) {
+      cont.scrollLeft -= ev.detail.magnitudeX - panLast.x;
+      cont.scrollTop -= ev.detail.magnitudeY - panLast.y;
+    }
+    panLast = { x: ev.detail.magnitudeX, y: ev.detail.magnitudeY };
+  }
+  if (ev.type === "gestureend") { pinchStart = null; panLast = null; }
+}
+
+function hookCanvas() {
+  canvas = screen.querySelector("canvas");
+  for (const type of ["gesturestart", "gesturemove", "gestureend"]) {
+    canvas.addEventListener(type, onGesture, true);
+  }
+}
+
+// ----- on-screen keyboard (noVNC Keyboard already handles virtual keys) -----
+
+const kbd = new Keyboard(kbdInput);
+kbd.onkeyevent = (keysym, code, down) => {
+  if (manual && online && rfb) rfb.sendKey(keysym, code, down);
+};
+let kbdGrabbed = false;
+function kbdGrab(on) {
+  if (on === kbdGrabbed) return;
+  kbdGrabbed = on;
+  on ? kbd.grab() : kbd.ungrab();
+  kbdButton.dataset.on = on;      // touchscreens have no keyboard focus to show
+}
+kbdInput.addEventListener("focus", () => kbdGrab(true));
+kbdInput.addEventListener("blur", () => kbdGrab(false));
+kbdButton.addEventListener("click", () =>
+  document.activeElement === kbdInput ? kbdInput.blur() : kbdInput.focus());
+
+function sendText(text) {
+  for (const ch of text) {
+    if (ch === "\n" || ch === "\r") { rfb.sendKey(0xff0d, "Enter"); continue; }
+    if (ch === "\t") { rfb.sendKey(0xff80, "Tab"); continue; }
+    const keysym = getKeysym({ key: ch });
+    if (keysym) rfb.sendKey(keysym, null);       // sendKey(keysym, code) = press + release
+  }
+}
+/* text committed from a mobile IME arrives via composition, not key events */
+kbdInput.addEventListener("compositionend", ev => {
+  if (manual && online && rfb && ev.data) sendText(ev.data);
+  kbdInput.value = "";
+});
+kbdInput.addEventListener("paste", ev => {
+  const text = ev.clipboardData.getData("text/plain");
+  if (!manual || !online || !text) return;
+  ev.preventDefault();
+  sendText(text);
+  kbdInput.value = "";
+});
+
+// ----- handover, idle fade, connection -----
 
 handover.addEventListener("click", () => {
   manual = !manual;
@@ -89,7 +236,6 @@ handover.addEventListener("click", () => {
   render();
 });
 
-let idleTimer = 0;
 function poke() {
   bar.classList.remove("idle");
   clearTimeout(idleTimer);
@@ -98,6 +244,22 @@ function poke() {
 poke();
 for (const ev of ["mousemove", "keydown", "pointerdown"]) {
   document.addEventListener(ev, poke);
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  screen.replaceChildren();
+  rfb = new RFB(screen, `${proto}://${location.host}/websockify`);
+  rfb.viewOnly = !manual;
+  rfb.scaleViewport = true;
+  rfb.addEventListener("connect", () => { online = true; hookCanvas(); render(); });
+  rfb.addEventListener("disconnect", () => {
+    online = false;
+    canvas = null;
+    render();
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connect, 3000);
+  });
 }
 
 connect();
