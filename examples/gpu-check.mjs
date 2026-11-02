@@ -1,10 +1,8 @@
-// Report the WebGL renderer of the resident Chrome: an NVIDIA name means GPU
-// rendering is active; llvmpipe/SwiftShader means software fallback.
-// Run against a GPU box (`-f compose.gpu.yml`) and a plain box to compare.
 import { chromium } from "playwright";
 
 const browser = await chromium.connectOverCDP(process.env.BOX_CDP ?? "http://127.0.0.1:9222");
 const page = await browser.contexts()[0].newPage();
+await page.goto(process.env.BOX_UI ?? "http://127.0.0.1:6080/");
 const info = await page.evaluate(() => {
   const canvas = document.createElement("canvas");
   const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");

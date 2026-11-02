@@ -59,7 +59,7 @@
     #label { display: none; }
     button { min-height: 44px; min-width: 44px; padding: 10px 12px; font-size: 15px; }
   }
-  #soft-keyboard[data-on="true"], #pad[data-on="true"] { background: #1f6feb; color: #fff; }
+  #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
 
   /* hidden input that summons the on-screen keyboard; kept in the top band so
      iOS never has to scroll for it while the keyboard is open */
@@ -80,7 +80,6 @@
   <button id="zoom-in" title="拡大" aria-label="拡大">＋</button>
   <button id="zoom-fit" title="全体を表示" aria-label="全体を表示">全体</button>
   <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>キー</button>
-  <button id="pad" title="タッチパッド操作" aria-label="タッチパッド操作" hidden>パッド</button>
   <button id="handover" data-mode="takeover" disabled>操作を引き継ぐ</button>
 </div>
 <script type="module">
@@ -94,7 +93,6 @@ const label = document.getElementById("label");
 const handover = document.getElementById("handover");
 const kbdButton = document.getElementById("soft-keyboard");
 const kbdInput = document.getElementById("kbd-input");
-const padButton = document.getElementById("pad");
 const coarse = matchMedia("(pointer: coarse)").matches;
 const MAX_ZOOM = 5;
 
@@ -116,9 +114,8 @@ function render() {
     ? (coarse ? "戻す" : "agent に戻す")
     : (coarse ? "引き継ぐ" : "操作を引き継ぐ");
   kbdButton.hidden = !(manual && online) || !coarse;
-  padButton.hidden = kbdButton.hidden;
-  if (!manual || !online) { kbdInput.blur(); padOff(); }
-  else padButton.dataset.on = pad;
+  if (!manual || !online) kbdInput.blur();
+  syncPad();
 }
 
 // ----- viewer zoom & pan (via noVNC Display.scale so input mapping stays exact) -----
@@ -190,27 +187,21 @@ function hookCanvas() {
   for (const type of ["gesturestart", "gesturemove", "gestureend"]) {
     canvas.addEventListener(type, onGesture, true);
   }
-  // touchpad mode must also swallow raw touches before GestureHandler sees
-  // them (its 50px drag threshold would eat the start of every swipe)
-  for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
-    canvas.addEventListener(type, onPadTouch, true);
-  }
 }
 
 // ----- touchpad mode: laptop-style relative cursor for coarse pointers -----
 
-const TAP_MS = 400;      // max press time still counted as a tap
-const TAP_SLOP = 10;     // movement (px) still counted as a tap
-const RETAP_MS = 400;    // window after a tap: the next touch may drag or double-click
-const DECIDE_SLOP = 15;  // movement (px) before 2 fingers commit to pinch or scroll
-const WHEEL_STEP = 50;   // finger travel (px) per wheel click
+const TAP_MS = 400;
+const TAP_SLOP = 10;
+const RETAP_MS = 400;
+const DECIDE_SLOP = 15;
+const WHEEL_STEP = 50;
 
-let pad = false;
-let padX = 0, padY = 0;      // virtual cursor, remote pixels
+let padX = null, padY = null;
 let padTapEnd = 0;
-let padDrag = false;         // left button held (tap → immediate drag)
-let t1 = null, t2 = null;    // tracked touches {id, x0, y0, x, y, start, retap}
-let twoMode = null;          // 2-finger gesture {type, dist, z, cx, cy, ax, ay}
+let padDrag = false;
+let t1 = null, t2 = null;
+let twoMode = null;
 
 function padMoveTo(x, y) {
   padX = Math.min(Math.max(x, 0), canvas.width - 1);
@@ -223,7 +214,6 @@ function padMoveTo(x, y) {
 
 function padBy(dx, dy) { padMoveTo(padX + dx / scale(), padY + dy / scale()); }
 
-/* mask: 1 left click, 4 right, 8/0x10 wheel up/down, 0x20/0x40 wheel left/right */
 function padClick(mask) { rfb._handleMouseButton(padX * scale(), padY * scale(), mask); }
 
 function padReset() {
@@ -232,10 +222,13 @@ function padReset() {
   t1 = t2 = twoMode = null;
 }
 
-function padOff() {
-  if (pad) padReset();
-  pad = false;
-  padButton.dataset.on = "false";
+function syncPad() {
+  if (!coarse || !manual || !online) { padReset(); padX = null; return; }
+  if (padX === null && canvas) {
+    padX = canvas.width / 2;
+    padY = canvas.height / 2;
+    padMoveTo(padX, padY);
+  }
 }
 
 function padStart(id, x, y) {
@@ -247,7 +240,6 @@ function padStart(id, x, y) {
     twoMode = { type: "undecided", dist: 0, z: scale(),
                 cx: (t1.x + x) / 2, cy: (t1.y + y) / 2, ax: 0, ay: 0 };
   }
-  // a further touch is ignored; the gesture ends when its fingers lift
 }
 
 function padMove(id, x, y) {
@@ -258,7 +250,7 @@ function padMove(id, x, y) {
   if (twoMode) { padTwoMove(); return; }
   if (padDrag) { padBy(x - px, y - py); return; }
   if (Math.hypot(x - t.x0, y - t.y0) <= TAP_SLOP) return;
-  if (t.retap) { padDrag = true; padClick(0x1); }   // tap → immediate drag
+  if (t.retap) { padDrag = true; padClick(0x1); }
   padBy(x - px, y - py);
 }
 
@@ -283,23 +275,22 @@ function padTwoMove() {
 }
 
 function padEnd(id, x, y) {
-  console.log("[padEnd]", id, "padDrag:", padDrag, "t1:", t1 && t1.id, "twoMode:", twoMode && twoMode.type);
   if (twoMode) {
     if (t1.id === id || t2.id === id) {
       const tap = twoMode.type === "undecided"
         && Date.now() - t1.start < TAP_MS
         && Math.hypot(x - t1.x0, y - t1.y0) <= TAP_SLOP
         && Math.hypot(t2.x - t2.x0, t2.y - t2.y0) <= TAP_SLOP;
-      if (tap) { padClick(0x4); padClick(0); }  // two-finger tap = right click
+      if (tap) { padClick(0x4); padClick(0); }
       padReset();
     }
     return;
   }
   if (!t1 || t1.id !== id) return;
-  if (padDrag) padClick(0);              // release the dragged button
+  if (padDrag) padClick(0);
   else if (Date.now() - t1.start < TAP_MS
         && Math.hypot(x - t1.x0, y - t1.y0) <= TAP_SLOP) {
-    padClick(0x1); padClick(0);          // tap = left press + release
+    padClick(0x1); padClick(0);
     padTapEnd = Date.now();
   } else {
     padTapEnd = 0;
@@ -309,11 +300,10 @@ function padEnd(id, x, y) {
 }
 
 function onPadTouch(ev) {
-  if (!pad) return;
+  if (!coarse || !manual || !online) return;
   ev.preventDefault();
-  ev.stopImmediatePropagation();         // keep raw touches from GestureHandler
+  ev.stopImmediatePropagation();
   poke();
-  console.log("[pad]", ev.type, [...ev.changedTouches].map(t => `${t.identifier}@${t.clientX},${t.clientY}`).join(" "));
   for (const t of ev.changedTouches) {
     if (ev.type === "touchstart") padStart(t.identifier, t.clientX, t.clientY);
     else if (ev.type === "touchmove") padMove(t.identifier, t.clientX, t.clientY);
@@ -322,17 +312,9 @@ function onPadTouch(ev) {
   }
 }
 
-padButton.addEventListener("click", () => {
-  pad = !pad;
-  if (pad && canvas) {
-    padX = canvas.width / 2;
-    padY = canvas.height / 2;
-    padMoveTo(padX, padY);               // jump the cursor where the user sees it
-  } else {
-    padReset();
-  }
-  render();
-});
+for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
+  screen.addEventListener(type, onPadTouch, true);
+}
 
 // ----- on-screen keyboard (noVNC Keyboard already handles virtual keys) -----
 

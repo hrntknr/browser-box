@@ -4,6 +4,15 @@ services:
     init: true
     restart: unless-stopped
     network_mode: host
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: graphics,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - profile:/data/profile
       - ./ui/index.html:/usr/share/novnc/index.html:ro
