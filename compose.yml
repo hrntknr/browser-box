@@ -6,6 +6,7 @@ services:
     network_mode: host
     volumes:
       - profile:/data/profile
+      - ./ui/index.html:/usr/share/novnc/index.html:ro
     shm_size: 1gb
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9222/json/version >/dev/null && curl -sf http://127.0.0.1:6080/vnc.html >/dev/null"]

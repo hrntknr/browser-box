@@ -13,9 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i 's/^# *ja_JP.UTF-8 UTF-8/ja_JP.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
-    && rm -rf /var/lib/apt/lists/* \
-    && printf '<!doctype html><meta http-equiv="refresh" content="0; url=vnc.html?autoconnect=1&resize=scale">\n' \
-       > /usr/share/novnc/index.html
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /data/profile/Default \
     && printf '{"intl":{"accept_languages":"ja,en-US;q=0.9,en;q=0.8"}}' \
