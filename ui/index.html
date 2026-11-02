@@ -193,15 +193,16 @@ function hookCanvas() {
   }
 }
 
-// ----- touchpad: laptop-style relative cursor, always on for coarse pointers -----
-// Handover only gates what gestures reach; before it viewOnly swallows remote
-// input, so the cursor moves silently and two-finger scroll pans locally.
+// ----- touchpad for coarse pointers: manual mode drives a laptop-style
+// relative cursor (and the zoomed view pans to keep it visible); before
+// handover there is no cursor — one finger just pans the view, iOS-style
 
 const TAP_MS = 400;
 const TAP_SLOP = 10;
 const RETAP_MS = 400;
 const DECIDE_SLOP = 15;
 const WHEEL_STEP = 50;
+const EDGE_MARGIN = 48;   // cursor keeps this much room inside the viewport edge
 
 let padX = null, padY = null;
 let padTapEnd = 0;
@@ -209,16 +210,33 @@ let padDrag = false;
 let t1 = null, t2 = null;
 let twoMode = null;
 
-function padMoveTo(x, y) {
+function padMoveTo(x, y, keepVisible) {
   padX = Math.min(Math.max(x, 0), canvas.width - 1);
   padY = Math.min(Math.max(y, 0), canvas.height - 1);
+  if (keepVisible) padKeepVisible();
   const r = canvas.getBoundingClientRect();
   rfb._fakeMouseMove({ detail: {
     clientX: r.left + padX * scale(), clientY: r.top + padY * scale(),
   } }, padX * scale(), padY * scale());
 }
 
-function padBy(dx, dy) { padMoveTo(padX + dx / scale(), padY + dy / scale()); }
+/* pan the zoomed view so the cursor stays on screen while a finger drives
+   it, EDGE_MARGIN inside the viewport; the scroll range stops the pan at
+   the drawing edge */
+function padKeepVisible() {
+  const cont = canvas.parentElement;
+  const cr = cont.getBoundingClientRect();
+  const r = canvas.getBoundingClientRect();
+  const cx = r.left + padX * scale();
+  const cy = r.top + padY * scale();
+  const beyond = (v, lo, hi) =>
+    v > hi - EDGE_MARGIN ? v - (hi - EDGE_MARGIN)
+      : v < lo + EDGE_MARGIN ? v - (lo + EDGE_MARGIN) : 0;
+  cont.scrollLeft += beyond(cx, cr.left, cr.right);
+  cont.scrollTop += beyond(cy, cr.top, cr.bottom);
+}
+
+function padBy(dx, dy) { padMoveTo(padX + dx / scale(), padY + dy / scale(), manual); }
 
 function padClick(mask) { rfb._handleMouseButton(padX * scale(), padY * scale(), mask); }
 
@@ -230,9 +248,14 @@ function padReset() {
 
 function syncPad() {
   if (!coarse || !online) { padReset(); padX = null; return; }
+  // the trackpad cursor exists only while operating — reading is just pan & zoom
+  rfb._cursor._canvas.style.visibility = manual ? "" : "hidden";
+  if (!manual) { padReset(); padX = null; return; }
   if (padX === null && canvas) {
-    padX = canvas.width / 2;
-    padY = canvas.height / 2;
+    // place the cursor where the user is looking, not always at the fb center
+    const r = canvas.getBoundingClientRect();
+    padX = Math.min(Math.max((innerWidth / 2 - r.left) / scale(), 0), canvas.width - 1);
+    padY = Math.min(Math.max((innerHeight / 2 - r.top) / scale(), 0), canvas.height - 1);
     padMoveTo(padX, padY);
   }
 }
@@ -253,8 +276,14 @@ function padMove(id, x, y) {
   const px = t.x, py = t.y;
   t.x = x; t.y = y;
   if (twoMode) { padTwoMove(); return; }
-  if (padDrag) { padBy(x - px, y - py); return; }
   if (Math.hypot(x - t.x0, y - t.y0) <= TAP_SLOP) return;
+  if (!manual) {   // reading: the finger just pans the view, iOS-style
+    const cont = canvas.parentElement;
+    cont.scrollLeft -= x - px;
+    cont.scrollTop -= y - py;
+    return;
+  }
+  if (padDrag) { padBy(x - px, y - py); return; }
   if (t.retap) { padDrag = true; padClick(0x1); }
   padBy(x - px, y - py);
 }
@@ -285,7 +314,6 @@ function padTwoMove() {
       cont.scrollTop -= ay - twoMode.ay;
       twoMode.ax = ax;
       twoMode.ay = ay;
-      padMoveTo(padX, padY);   // cursor follows the panned view
     }
   }
 }
@@ -297,14 +325,14 @@ function padEnd(id, x, y) {
         && Date.now() - t1.start < TAP_MS
         && Math.hypot(x - t1.x0, y - t1.y0) <= TAP_SLOP
         && Math.hypot(t2.x - t2.x0, t2.y - t2.y0) <= TAP_SLOP;
-      if (tap) { padClick(0x4); padClick(0); }
+      if (tap && manual) { padClick(0x4); padClick(0); }
       padReset();
     }
     return;
   }
   if (!t1 || t1.id !== id) return;
   if (padDrag) padClick(0);
-  else if (Date.now() - t1.start < TAP_MS
+  else if (manual && Date.now() - t1.start < TAP_MS
         && Math.hypot(x - t1.x0, y - t1.y0) <= TAP_SLOP) {
     padClick(0x1); padClick(0);
     padTapEnd = Date.now();

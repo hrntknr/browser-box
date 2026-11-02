@@ -1,9 +1,9 @@
 // Mobile-UI regression checks for the viewer at http://localhost:6080/ (live box).
-// Coarse-pointer bar layout, the always-on trackpad (relative cursor in both
-// read-only and manual modes), pinch zoom, two-finger pan/scroll, and the
-// on-screen keyboard pipeline are all verified by watching the viewer's own
-// WebSocket traffic (VNC wire frames), so nothing depends on remote desktop
-// state.
+// Coarse-pointer bar layout, the manual-mode trackpad (relative cursor with
+// edge-following pan), the read-only iOS-style scroll, pinch zoom,
+// two-finger pan/scroll, and the on-screen keyboard pipeline are all verified
+// by watching the viewer's own WebSocket traffic (VNC wire frames), so nothing
+// depends on remote desktop state.
 import { strict as assert } from "node:assert";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
@@ -100,25 +100,19 @@ const idleOpacity = await page.evaluate(() =>
   getComputedStyle(document.getElementById("bar")).opacity);
 assert.ok(Number(idleOpacity) > 0.9, `bar faded to ${idleOpacity} on coarse pointer (should stay visible)`);
 
-// noVNC's touch fallback cursor (body > canvas) is the trackpad cursor image
-const cursorPos = page => page.evaluate(() => {
-  const c = document.querySelector("body > canvas");
-  return { x: parseFloat(c.style.left) || 0, y: parseFloat(c.style.top) || 0 };
-});
+// noVNC's touch fallback cursor (body > canvas) draws the trackpad cursor
+const cursorVisible = page => page.evaluate(() =>
+  getComputedStyle(document.querySelector("body > canvas")).visibility);
 
-// ---- the trackpad is active already in read-only: a one-finger drag moves
-// the relative cursor by the drag delta (not a jump to the finger) and leaks
-// nothing to the remote
+// ---- read-only has no trackpad cursor and a one-finger drag leaks nothing
+// to the remote (pan only works once zoomed, checked after the pinch)
 await resetFrames(page);
-const cur0 = await cursorPos(page);
 await sweep([{ x: 60, y: 600 }], [{ x: 20, y: 0 }], 5);       // one-finger drag
-const cur1 = await cursorPos(page);
-assert.ok(Math.abs(cur1.x - cur0.x - 100) < 12 && Math.abs(cur1.y - cur0.y) < 12,
-  `read-only touch is not trackpad: cursor ${JSON.stringify(cur0)} -> ` +
-  `${JSON.stringify(cur1)} (finger (60,600) -> (160,600))`);
 const roPointers = await decoded(page, "pointer");
 assert.equal(roPointers.length, 0,
   `read-only touch leaked to the remote: ${JSON.stringify(roPointers)}`);
+assert.equal(await cursorVisible(page), "hidden",
+  "read-only mode should not draw a trackpad cursor");
 
 // ---- pinch zoom (two fingers spreading) grows the canvas ----
 await resetFrames(page);   // also proves the pinch is NOT forwarded as remote Ctrl+wheel
@@ -149,8 +143,28 @@ const scroll1 = await page.evaluate(() => {
 assert.ok(scroll1.left > scroll0.left,
   `two-finger drag did not pan (scrollLeft ${scroll0.left} -> ${scroll1.left})`);
 
-// ---- take over (manual mode) so gestures are forwarded to the remote ----
+// ---- read-only one-finger drag pans the view too, iOS-style ----
+const panOf = page => page.evaluate(() => {
+  const p = document.querySelector("#screen canvas").parentElement;
+  return { left: p.scrollLeft, max: p.scrollWidth - p.clientWidth };
+});
+const roPan0 = await panOf(page);
+assert.ok(roPan0.max > 200, `zoom left no room to pan (max=${roPan0.max})`);
+await page.evaluate(() => {
+  const p = document.querySelector("#screen canvas").parentElement;
+  p.scrollLeft = p.scrollWidth - p.clientWidth;   // fully right: room only leftwards
+});
+await sweep([{ x: 80, y: 500 }], [{ x: 25, y: 0 }], 4);      // drag the view right
+const roPan1 = await panOf(page);
+assert.ok(roPan0.max - roPan1.left >= 75 && roPan0.max - roPan1.left <= 125,
+  `read-only one-finger drag did not pan iOS-style (scrollLeft max -> ${roPan1.left})`);
+assert.equal(await cursorVisible(page), "hidden",
+  "dragging in read-only must not raise a cursor");
+
+// ---- take over (manual mode): the trackpad cursor appears ----
 await page.click("#handover");
+assert.equal(await cursorVisible(page), "visible",
+  "taking over should draw the trackpad cursor");
 
 // ---- tap: clicks land at the trackpad cursor, not at the finger ----
 await resetFrames(page);
@@ -184,6 +198,26 @@ const wheels = await decoded(page, "pointer");
 assert.ok(wheels.filter(p => p.mask === 0x8).length >= 2,
   `two-finger drag did not wheel the remote: ${JSON.stringify(wheels.slice(-8))}`);
 
+// ---- pushing the cursor against the screen edge pans the zoomed view ----
+// the cursor was placed at the visible center on handover; driving it past
+// the EDGE_MARGIN (48px) pan-scrolls the view so it stays just inside
+const edgePan = () => page.evaluate(() => {
+  const p = document.querySelector("#screen canvas").parentElement;
+  const pr = p.getBoundingClientRect();
+  return {
+    left: p.scrollLeft,
+    viewLeft: pr.left, viewRight: pr.right,
+    curX: parseFloat(document.querySelector("body > canvas").style.left) || 0,
+  };
+});
+const edge0 = await edgePan();
+await sweep([{ x: 310, y: 500 }], [{ x: -40, y: 0 }], 6);   // drive the cursor left
+const edge1 = await edgePan();
+assert.ok(edge0.left - edge1.left > 50,
+  `pushing the cursor past the margin did not pan (scrollLeft ${edge0.left} -> ${edge1.left})`);
+assert.ok(Math.abs(edge1.curX - edge1.viewLeft - 48) < 7,
+  `cursor not kept 48px inside the edge (curX=${edge1.curX}, viewLeft=${edge1.viewLeft})`);
+
 // ---- キーボード button: typing reaches the VNC wire ----
 await page.click("#soft-keyboard");       // focus hidden input
 assert.equal(await page.getAttribute("#soft-keyboard", "data-on"), "true",
@@ -202,6 +236,11 @@ const fittedWidth = await page.evaluate(() =>
   document.querySelector("#screen canvas").style.width);
 assert.ok(Math.abs(parseFloat(fittedWidth) - canvas0.w) < 2,
   `fit didn't restore ${canvas0.w}px (got ${fittedWidth})`);
+
+// ---- returning the controls hides the trackpad cursor again ----
+await page.click("#handover");
+assert.equal(await cursorVisible(page), "hidden",
+  "giving the controls back should hide the trackpad cursor");
 
 await mkdir("artifacts", { recursive: true });
 await page.screenshot({ path: "artifacts/ui-mobile.png" });
