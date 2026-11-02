@@ -4,10 +4,10 @@ export DISPLAY="${DISPLAY:-:99}"
 CHROME_ARGS="--user-data-dir=/data/profile \
 --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 \
 --no-first-run --no-default-browser-check --no-sandbox \
---disable-gpu --window-size=1280,800 about:blank"
+--disable-gpu --window-size=1920,1080 about:blank"
 
 rm -f /tmp/.X99-lock
-Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp &
+Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp &
 XVFB_PID=$!
 fluxbox >/dev/null 2>&1 &
 x11vnc -display "$DISPLAY" -forever -shared -nopw -localhost -quiet &
