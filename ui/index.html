@@ -131,17 +131,20 @@ function fitScale() {
 function zoomTo(z, ax, ay) {
   if (!canvas) return;
   z = Math.min(z, MAX_ZOOM);
-  if (z <= fitScale() * 1.02) { rfb.scaleViewport = true; return; }
-  const cont = canvas.parentElement;
-  const old = scale();
-  const r0 = canvas.getBoundingClientRect();
-  const fx = (ax - r0.left) / old;
-  const fy = (ay - r0.top) / old;
-  if (rfb.scaleViewport) rfb.scaleViewport = false;   // reset to 1 happens here, once
-  rfb._display.scale = z;
-  const r1 = canvas.getBoundingClientRect();
-  cont.scrollLeft += r1.left - (ax - fx * z);
-  cont.scrollTop += r1.top - (ay - fy * z);
+  if (z <= fitScale() * 1.02) rfb.scaleViewport = true;
+  else {
+    const cont = canvas.parentElement;
+    const old = scale();
+    const r0 = canvas.getBoundingClientRect();
+    const fx = (ax - r0.left) / old;
+    const fy = (ay - r0.top) / old;
+    if (rfb.scaleViewport) rfb.scaleViewport = false;   // reset to 1 happens here, once
+    rfb._display.scale = z;
+    const r1 = canvas.getBoundingClientRect();
+    cont.scrollLeft += r1.left - (ax - fx * z);
+    cont.scrollTop += r1.top - (ay - fy * z);
+  }
+  if (padX !== null) padMoveTo(padX, padY);   // keep the cursor on its remote spot
 }
 
 function zoomStep(factor) {
@@ -156,7 +159,8 @@ document.getElementById("zoom-fit").addEventListener("click", () => rfb && (rfb.
 
 // noVNC turns pinch into remote Ctrl+wheel and two-finger drag into remote
 // scroll; capture-phase lets us take those two gestures for local zoom & pan
-// while taps, drags and long-presses keep going to the remote.
+// while taps, drags and long-presses keep going to the remote. Coarse
+// pointers never get this far: the touchpad below claims all their touches.
 let pinchStart = null;
 let panLast = null;
 
@@ -189,7 +193,9 @@ function hookCanvas() {
   }
 }
 
-// ----- touchpad mode: laptop-style relative cursor for coarse pointers -----
+// ----- touchpad: laptop-style relative cursor, always on for coarse pointers -----
+// Handover only gates what gestures reach; before it viewOnly swallows remote
+// input, so the cursor moves silently and two-finger scroll pans locally.
 
 const TAP_MS = 400;
 const TAP_SLOP = 10;
@@ -223,7 +229,7 @@ function padReset() {
 }
 
 function syncPad() {
-  if (!coarse || !manual || !online) { padReset(); padX = null; return; }
+  if (!coarse || !online) { padReset(); padX = null; return; }
   if (padX === null && canvas) {
     padX = canvas.width / 2;
     padY = canvas.height / 2;
@@ -237,8 +243,7 @@ function padStart(id, x, y) {
     t1 = { id, x0: x, y0: y, x, y, start: now, retap: now - padTapEnd < RETAP_MS };
   } else if (!t2 && !twoMode && !padDrag) {
     t2 = { id, x0: x, y0: y, x, y };
-    twoMode = { type: "undecided", dist: 0, z: scale(),
-                cx: (t1.x + x) / 2, cy: (t1.y + y) / 2, ax: 0, ay: 0 };
+    twoMode = { type: "undecided", z: scale(), cx: (t1.x + x) / 2, cy: (t1.y + y) / 2 };
   }
 }
 
@@ -261,16 +266,27 @@ function padTwoMove() {
     if (Math.max(Math.hypot(d1x, d1y), Math.hypot(d2x, d2y)) < DECIDE_SLOP) return;
     twoMode.type = d1x * d2x + d1y * d2y < 0 ? "pinch" : "scroll";
     twoMode.dist = Math.hypot(t1.x - t2.x, t1.y - t2.y);
+    twoMode.ax = (d1x + d2x) / 2;   // travel origin for wheel/pan accounting
+    twoMode.ay = (d1y + d2y) / 2;
   }
   if (twoMode.type === "pinch") {
     const dist = Math.hypot(t1.x - t2.x, t1.y - t2.y);
     if (dist > 0) zoomTo(twoMode.z * dist / twoMode.dist, twoMode.cx, twoMode.cy);
   } else {
     const ax = (d1x + d2x) / 2, ay = (d1y + d2y) / 2;
-    while (ay - twoMode.ay >= WHEEL_STEP) { padClick(0x10); padClick(0); twoMode.ay += WHEEL_STEP; }
-    while (twoMode.ay - ay >= WHEEL_STEP) { padClick(0x8); padClick(0); twoMode.ay -= WHEEL_STEP; }
-    while (ax - twoMode.ax >= WHEEL_STEP) { padClick(0x40); padClick(0); twoMode.ax += WHEEL_STEP; }
-    while (twoMode.ax - ax >= WHEEL_STEP) { padClick(0x20); padClick(0); twoMode.ax -= WHEEL_STEP; }
+    if (manual) {
+      while (ay - twoMode.ay >= WHEEL_STEP) { padClick(0x10); padClick(0); twoMode.ay += WHEEL_STEP; }
+      while (twoMode.ay - ay >= WHEEL_STEP) { padClick(0x8); padClick(0); twoMode.ay -= WHEEL_STEP; }
+      while (ax - twoMode.ax >= WHEEL_STEP) { padClick(0x40); padClick(0); twoMode.ax += WHEEL_STEP; }
+      while (twoMode.ax - ax >= WHEEL_STEP) { padClick(0x20); padClick(0); twoMode.ax -= WHEEL_STEP; }
+    } else {
+      const cont = canvas.parentElement;
+      cont.scrollLeft -= ax - twoMode.ax;
+      cont.scrollTop -= ay - twoMode.ay;
+      twoMode.ax = ax;
+      twoMode.ay = ay;
+      padMoveTo(padX, padY);   // cursor follows the panned view
+    }
   }
 }
 
@@ -300,16 +316,14 @@ function padEnd(id, x, y) {
 }
 
 function onPadTouch(ev) {
-  if (!coarse || !manual || !online) return;
+  if (!coarse || !online) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
   poke();
-  for (const t of ev.changedTouches) {
-    if (ev.type === "touchstart") padStart(t.identifier, t.clientX, t.clientY);
-    else if (ev.type === "touchmove") padMove(t.identifier, t.clientX, t.clientY);
-    else if (ev.type === "touchend") padEnd(t.identifier, t.clientX, t.clientY);
-    else padReset();
-  }
+  if (ev.type === "touchcancel") { padReset(); return; }
+  const fn = ev.type === "touchstart" ? padStart
+    : ev.type === "touchmove" ? padMove : padEnd;
+  for (const t of ev.changedTouches) fn(t.identifier, t.clientX, t.clientY);
 }
 
 for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {

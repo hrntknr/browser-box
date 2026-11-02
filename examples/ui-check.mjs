@@ -1,8 +1,9 @@
 // Mobile-UI regression checks for the viewer at http://localhost:6080/ (live box).
-// Coarse-pointer bar layout, pinch zoom, two-finger pan, tap accuracy while
-// zoomed, and the on-screen keyboard pipeline are all verified by watching
-// the viewer's own WebSocket traffic (VNC wire frames), so nothing depends on
-// remote desktop state.
+// Coarse-pointer bar layout, the always-on trackpad (relative cursor in both
+// read-only and manual modes), pinch zoom, two-finger pan/scroll, and the
+// on-screen keyboard pipeline are all verified by watching the viewer's own
+// WebSocket traffic (VNC wire frames), so nothing depends on remote desktop
+// state.
 import { strict as assert } from "node:assert";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
@@ -48,6 +49,16 @@ async function touch(type, points) {
   await cdp.send("Input.dispatchTouchEvent", { type, touchPoints: points });
 }
 
+// touch down at `points`, move each by deltas[j] once per step, then release
+async function sweep(points, deltas, steps) {
+  await touch("touchStart", points);
+  for (let i = 1; i <= steps; i++) {
+    await touch("touchMove", points.map((p, j) => ({
+      x: p.x + deltas[j].x * i, y: p.y + deltas[j].y * i })));
+  }
+  await touch("touchEnd", []);
+}
+
 // ---- connect ----
 await page.goto(UI, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("#screen canvas");
@@ -89,17 +100,32 @@ const idleOpacity = await page.evaluate(() =>
   getComputedStyle(document.getElementById("bar")).opacity);
 assert.ok(Number(idleOpacity) > 0.9, `bar faded to ${idleOpacity} on coarse pointer (should stay visible)`);
 
+// noVNC's touch fallback cursor (body > canvas) is the trackpad cursor image
+const cursorPos = page => page.evaluate(() => {
+  const c = document.querySelector("body > canvas");
+  return { x: parseFloat(c.style.left) || 0, y: parseFloat(c.style.top) || 0 };
+});
+
+// ---- the trackpad is active already in read-only: a one-finger drag moves
+// the relative cursor by the drag delta (not a jump to the finger) and leaks
+// nothing to the remote
+await resetFrames(page);
+const cur0 = await cursorPos(page);
+await sweep([{ x: 60, y: 600 }], [{ x: 20, y: 0 }], 5);       // one-finger drag
+const cur1 = await cursorPos(page);
+assert.ok(Math.abs(cur1.x - cur0.x - 100) < 12 && Math.abs(cur1.y - cur0.y) < 12,
+  `read-only touch is not trackpad: cursor ${JSON.stringify(cur0)} -> ` +
+  `${JSON.stringify(cur1)} (finger (60,600) -> (160,600))`);
+const roPointers = await decoded(page, "pointer");
+assert.equal(roPointers.length, 0,
+  `read-only touch leaked to the remote: ${JSON.stringify(roPointers)}`);
+
 // ---- pinch zoom (two fingers spreading) grows the canvas ----
 await resetFrames(page);   // also proves the pinch is NOT forwarded as remote Ctrl+wheel
 const cy = canvas0.top + canvas0.h / 2;
-await touch("touchStart", [
-  { x: canvas0.left + 160, y: cy }, { x: canvas0.left + 230, y: cy }]);
-for (let i = 1; i <= 10; i++) {
-  const grow = i * 8;
-  await touch("touchMove", [
-    { x: canvas0.left + 160 - grow, y: cy }, { x: canvas0.left + 230 + grow, y: cy }]);
-}
-await touch("touchEnd", []);
+await sweep(
+  [{ x: canvas0.left + 160, y: cy }, { x: canvas0.left + 230, y: cy }],
+  [{ x: -8, y: 0 }, { x: 8, y: 0 }], 10);
 const styleWidth = await page.evaluate(() =>
   document.querySelector("#screen canvas").style.width);
 assert.ok(parseFloat(styleWidth) > canvas0.w * 2,
@@ -113,12 +139,9 @@ const scroll0 = await page.evaluate(() => {
   const p = document.querySelector("#screen canvas").parentElement;
   return { left: p.scrollLeft, top: p.scrollTop };
 });
-await touch("touchStart", [{ x: 200, y: 400 }, { x: 290, y: 400 }]);
-for (let i = 1; i <= 6; i++) {
-  await touch("touchMove", [
-    { x: 200 - i * 30, y: 400 }, { x: 290 - i * 30, y: 400 }]);
-}
-await touch("touchEnd", []);
+await sweep(
+  [{ x: 200, y: 400 }, { x: 290, y: 400 }],
+  [{ x: -30, y: 0 }, { x: -30, y: 0 }], 6);
 const scroll1 = await page.evaluate(() => {
   const p = document.querySelector("#screen canvas").parentElement;
   return { left: p.scrollLeft, top: p.scrollTop };
@@ -126,25 +149,40 @@ const scroll1 = await page.evaluate(() => {
 assert.ok(scroll1.left > scroll0.left,
   `two-finger drag did not pan (scrollLeft ${scroll0.left} -> ${scroll1.left})`);
 
-// ---- take over (manual mode) so taps are forwarded to the remote ----
+// ---- take over (manual mode) so gestures are forwarded to the remote ----
 await page.click("#handover");
 
-// ---- tap accuracy while zoomed: viewer point -> VNC pointerEvent fb coords ----
+// ---- tap: clicks land at the trackpad cursor, not at the finger ----
 await resetFrames(page);
 const target = await page.evaluate(() => {
   const c = document.querySelector("#screen canvas");
+  const cur = document.querySelector("body > canvas");   // fallback cursor
   const r = c.getBoundingClientRect();
-  const px = innerWidth / 2, py = innerHeight / 2;   // guaranteed inside the viewport
   const s = r.width / c.width;
-  return { px, py, fbx: Math.round((px - r.left) / s), fby: Math.round((py - r.top) / s) };
+  const fx = (parseFloat(cur.style.left) - r.left) / s;  // cursor in fb coords
+  const fy = (parseFloat(cur.style.top) - r.top) / s;
+  const px = 300, py = 150;   // deliberately far from the cursor
+  return { px, py, fx, fy,
+           fbx: (px - r.left) / s, fby: (py - r.top) / s };
 });
 await page.touchscreen.tap(target.px, target.py);
 await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
 const pointers = await decoded(page, "pointer");
-assert.ok(pointers.some(p => p.mask === 0 &&
-  Math.abs(p.x - target.fbx) < 3 && Math.abs(p.y - target.fby) < 3),
-  `zoomed tap mapped wrong: ${JSON.stringify(pointers.slice(-4))}, ` +
-  `expected fb (${target.fbx}, ${target.fby})`);
+assert.ok(pointers.some(p => p.mask === 1 &&
+  Math.abs(p.x - target.fx) < 3 && Math.abs(p.y - target.fy) < 3),
+  `tap did not click at the trackpad cursor: ${JSON.stringify(pointers.slice(-6))}, ` +
+  `expected fb (${target.fx.toFixed(0)}, ${target.fy.toFixed(0)})`);
+assert.ok(Math.hypot(target.fx - target.fbx, target.fy - target.fby) > 20,
+  "finger position and cursor coincide; tap mapping is not pinned");
+
+// ---- two-finger drag scrolls the remote page in manual mode ----
+await resetFrames(page);
+await sweep(
+  [{ x: 200, y: 300 }, { x: 290, y: 300 }],
+  [{ x: 0, y: -40 }, { x: 0, y: -40 }], 6);
+const wheels = await decoded(page, "pointer");
+assert.ok(wheels.filter(p => p.mask === 0x8).length >= 2,
+  `two-finger drag did not wheel the remote: ${JSON.stringify(wheels.slice(-8))}`);
 
 // ---- キーボード button: typing reaches the VNC wire ----
 await page.click("#soft-keyboard");       // focus hidden input
