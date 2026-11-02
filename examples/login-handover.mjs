@@ -5,7 +5,7 @@ const browser = await chromium.connectOverCDP(process.env.BOX_CDP ?? "http://127
 const context = browser.contexts()[0];
 const page = context.pages()[0] ?? (await context.newPage());
 await page.goto(url);
-console.log("-> open http://localhost:6080/vnc.html and log in manually");
+console.log("-> open http://localhost:6080/ and log in manually");
 
 await page.waitForSelector("body", { timeout: 0 });
 

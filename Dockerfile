@@ -8,7 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb fluxbox x11vnc novnc websockify \
       fonts-noto-cjk xclip procps \
       nodejs npm \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '<!doctype html><meta http-equiv="refresh" content="0; url=vnc.html?autoconnect=1">\n' \
+       > /usr/share/novnc/index.html
 
 RUN mkdir -p /data/profile
 
