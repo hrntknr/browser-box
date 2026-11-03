@@ -60,6 +60,7 @@
     button { min-height: 44px; min-width: 44px; padding: 10px 12px; font-size: 15px; }
   }
   #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
+  #pip[data-on="true"] { background: #1f6feb; color: #fff; }
 
   /* hidden input that summons the on-screen keyboard; kept in the top band so
      iOS never has to scroll for it while the keyboard is open */
@@ -79,6 +80,7 @@
   <button id="zoom-out" title="縮小" aria-label="縮小">−</button>
   <button id="zoom-in" title="拡大" aria-label="拡大">＋</button>
   <button id="zoom-fit" title="全体を表示" aria-label="全体を表示">全体</button>
+  <button id="pip" title="最前面の小窓で表示 (Picture-in-Picture)" aria-label="最前面の小窓で表示" hidden>PiP</button>
   <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>キー</button>
   <button id="handover" data-mode="takeover" disabled>操作を引き継ぐ</button>
 </div>
@@ -91,6 +93,7 @@ const screen = document.getElementById("screen");
 const bar = document.getElementById("bar");
 const label = document.getElementById("label");
 const handover = document.getElementById("handover");
+const pipButton = document.getElementById("pip");
 const kbdButton = document.getElementById("soft-keyboard");
 const kbdInput = document.getElementById("kbd-input");
 const coarse = matchMedia("(pointer: coarse)").matches;
@@ -109,6 +112,7 @@ function render() {
     : manual ? "手動操作中 — 入力が有効"
     : "表示のみ — agent が操作中";
   handover.disabled = !online;
+  pipButton.disabled = !online && !pipActive();   // keep the exit path open in PiP
   handover.dataset.mode = manual ? "return" : "takeover";
   handover.textContent = manual
     ? (coarse ? "戻す" : "agent に戻す")
@@ -156,6 +160,68 @@ function zoomStep(factor) {
 document.getElementById("zoom-in").addEventListener("click", () => zoomStep(1.35));
 document.getElementById("zoom-out").addEventListener("click", () => zoomStep(1 / 1.35));
 document.getElementById("zoom-fit").addEventListener("click", () => rfb && (rfb.scaleViewport = true));
+
+// ----- Picture-in-Picture: mirror the canvas into an always-on-top mini
+// window, so the box stays watchable while another app is in focus.
+// iOS Safari only grants the PiP request when it runs synchronously inside
+// the tap with the video already playing, so the stream is warmed up on
+// connect and the click handler never awaits before requesting.
+
+const pipVideo = document.createElement("video");   // stream sink, never visible
+pipVideo.muted = true;
+pipVideo.playsInline = true;
+pipVideo.style.cssText =
+  "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
+document.body.appendChild(pipVideo);
+
+function pipAttach() {
+  pipDetach();                                    // re-connect swaps the canvas
+  pipVideo.srcObject = canvas.captureStream(30);
+  pipVideo.play().catch(() => {});
+}
+
+function pipDetach() {
+  const stream = pipVideo.srcObject;
+  if (!stream) return;
+  for (const t of stream.getTracks()) t.stop();
+  pipVideo.srcObject = null;
+}
+
+function pipActive() {
+  return document.pictureInPictureElement === pipVideo
+    || pipVideo.webkitPresentationMode === "picture-in-picture";
+}
+
+// iOS Safari grants PiP normally in tabs and rejects it in Home Screen web
+// apps, while pictureInPictureEnabled reports true in both (WebKit bug
+// 303885) and the webkit probe misreports canvas-stream videos — so hide the
+// button by the standalone context itself, and trust the standard signal
+// everywhere else.
+function pipDetect() {
+  const standalone = navigator.standalone
+    || matchMedia("(display-mode: standalone)").matches;
+  pipButton.hidden = !document.pictureInPictureEnabled
+    || (standalone && typeof pipVideo.webkitSupportsPresentationMode === "function");
+}
+pipDetect();
+pipButton.addEventListener("click", () => {
+  if (pipActive()) {                               // exit
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+    else pipVideo.webkitSetPresentationMode("inline");
+    return;
+  }
+  if (pipVideo.requestPictureInPicture) pipVideo.requestPictureInPicture().catch(() => {});
+  else pipVideo.webkitSetPresentationMode("picture-in-picture");   // Safari: no standard PiP API
+});
+function pipSync() {
+  if (pipActive()) pipButton.dataset.on = "true";
+  else delete pipButton.dataset.on;
+  // iOS pauses the video when its PiP closes; resume so the next tap works
+  if (!pipActive() && online && pipVideo.paused) pipVideo.play().catch(() => {});
+}
+for (const ev of ["enterpictureinpicture", "leavepictureinpicture",
+  "webkitpresentationmodechanged"])
+  pipVideo.addEventListener(ev, pipSync);
 
 // noVNC turns pinch into remote Ctrl+wheel and two-finger drag into remote
 // scroll; capture-phase lets us take those two gestures for local zoom & pan
@@ -422,10 +488,17 @@ function connect() {
   rfb = new RFB(screen, `${proto}://${location.host}/websockify`);
   rfb.viewOnly = !manual;
   rfb.scaleViewport = true;
-  rfb.addEventListener("connect", () => { online = true; hookCanvas(); render(); });
+  rfb.addEventListener("connect", () => {
+    online = true;
+    hookCanvas();
+    if (canvas.captureStream) pipAttach();   // warm stream for the PiP window
+    else pipButton.hidden = true;
+    render();
+  });
   rfb.addEventListener("disconnect", () => {
     online = false;
     canvas = null;
+    if (!pipActive()) pipDetach();   // in PiP, keep the last frame through a brief reconnect
     render();
     clearTimeout(retryTimer);
     retryTimer = setTimeout(connect, 3000);

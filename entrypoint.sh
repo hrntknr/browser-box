@@ -40,6 +40,7 @@ apt-get update -qq
 npx --yes playwright install chrome
 rm -f /data/profile/Singleton*
 mkdir -p /run/dbus
+rm -f /run/dbus/pid /run/dbus/system_bus_socket   # stale after docker restart
 dbus-daemon --system --fork
 eval "$(dbus-launch --sh-syntax)"
 google-chrome-stable $CHROME_ARGS &
