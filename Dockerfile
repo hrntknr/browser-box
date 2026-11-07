@@ -19,6 +19,10 @@ RUN mkdir -p /data/profile/Default \
     && printf '{"intl":{"accept_languages":"ja,en-US;q=0.9,en;q=0.8"}}' \
        > /data/profile/Default/Preferences
 
+RUN mkdir -p /etc/opt/chrome/policies/managed \
+    && printf '{"ExtensionInstallForcelist":["mfnicocicmmlkpjnaffgihfjhdgjkdjg;https://clients2.google.com/service/update2/crx"]}' \
+       > /etc/opt/chrome/policies/managed/browse.json
+
 COPY entrypoint.sh /app/entrypoint.sh
 EXPOSE 9222 6080
 

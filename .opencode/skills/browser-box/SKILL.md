@@ -1,12 +1,18 @@
 ---
 name: browser-box
-description: Drive the long-running resident Chrome via the browser-box MCP tools, or Playwright scripts over CDP, for browsing, checking pages, screenshots, and logins. Use when the user asks to "open in a browser", "look at a page", "take a screenshot", or "log in".
+description: Drive the long-running resident Chrome via the browser-box MCP tools, or Playwright scripts over CDP, for browsing, checking pages, screenshots, and logins. Use when the user asks to "open in a browser", "look at a page", "take a screenshot", or "log in". Also covers the OpenCode browse MCP server, which drives this same Chrome when paired.
 ---
 
 # browser-box
 
 A resident Chrome runs at the `BOX_CDP` endpoint (default `http://127.0.0.1:9222`). If `curl -s http://127.0.0.1:9222/json/version` fails, the box is down; tell the user just that.
 http://localhost:6080/ mirrors the Chrome screen read-only; the user gets control after pressing the handover button (操作を引き継ぐ). Point them there to watch or take over.
+
+## OpenCode browse
+
+The box's Chrome force-installs the OpenCode browse extension, so if a `browse` MCP server is connected, prefer its tools (`session_new`, `execute`, …) over everything below: it drives this same resident Chrome and profile, keeps agent tabs in a collapsed background group, and closes idle tabs itself. `execute` runs Playwright code with `page`, `snapshot()` and `handoff()`; when a handoff waits, tell the user to click **Continue** on the card in the box's Chrome (take over first at http://localhost:6080/ if needed). Browse refuses what the raw paths allow (no `page.bringToFront()`, cookie writes limited to the session's pages, no clearing profile data), and downloads or clipboard grants still need CDP scripts.
+
+One-time pairing, when the user asks to set it up: install browse on the host (`curl -fsSL https://opencode.ai/browse/install | bash`, pick OpenCode), run `browse pair` for a code, then open `chrome://extensions/?options=mfnicocicmmlkpjnaffgihfjhdgjkdjg` in the box's Chrome via the viewer, leave Relay address at `localhost:19988` (the box shares the host network), enter the code and pair. Only one browser profile can be paired at a time.
 
 ## MCP first
 
