@@ -7,13 +7,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg locales dbus dbus-x11 \
-      xvfb fluxbox x11vnc novnc websockify \
+      tigervnc-standalone-server xfonts-base fluxbox novnc websockify \
       fonts-noto-cjk fonts-vlgothic fonts-ipafont \
       xclip procps nodejs npm libvulkan1 vulkan-tools \
     && sed -i 's/^# *ja_JP.UTF-8 UTF-8/ja_JP.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
     && rm -rf /var/lib/apt/lists/*
+
+# stock noVNC refuses SetDesktopSize while view-only; allow it so the remote
+# resolution follows the viewer window even before handover
+RUN node -e 'const fs=require("fs");const p="/usr/share/novnc/core/rfb.js";let s=fs.readFileSync(p,"utf8");const t="if (!this._resizeSession || this._viewOnly ||";if(!s.includes(t)){console.error("rfb.js patch target not found");process.exit(1)}fs.writeFileSync(p,s.replace(t,"if (!this._resizeSession ||"))'
 
 RUN mkdir -p /data/profile/Default \
     && printf '{"intl":{"accept_languages":"ja,en-US;q=0.9,en;q=0.8"}}' \
@@ -25,6 +29,7 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 
 RUN npx --yes playwright install chrome
 
+COPY fluxbox/ /root/.fluxbox/
 COPY ui/index.html /usr/share/novnc/index.html
 COPY entrypoint.sh /app/entrypoint.sh
 EXPOSE 9222 6080

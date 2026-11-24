@@ -153,13 +153,42 @@ function zoomTo(z, ax, ay) {
 
 function zoomStep(factor) {
   if (!canvas) return;
+  zoomMode = "manual";
   const r = canvas.parentElement.getBoundingClientRect();
   zoomTo(scale() * factor, r.left + r.width / 2, r.top + r.height / 2);
 }
 
 document.getElementById("zoom-in").addEventListener("click", () => zoomStep(1.35));
 document.getElementById("zoom-out").addEventListener("click", () => zoomStep(1 / 1.35));
-document.getElementById("zoom-fit").addEventListener("click", () => rfb && (rfb.scaleViewport = true));
+document.getElementById("zoom-fit").addEventListener("click", () => {
+  zoomMode = "fit";
+  if (rfb) rfb.scaleViewport = true;
+});
+
+// ----- default view: the remote resolution follows this window
+// (resizeSession; the stock view-only block is patched out in the image).
+// BOOST is a slight enlargement on top of the fit scale, re-applied
+// whenever the framebuffer or the window changes size -----
+
+const BOOST = 1.08;
+let zoomMode = "boost";
+let boostTimer = 0;
+
+function applyBoost() {
+  if (!canvas || !rfb || zoomMode !== "boost") return;
+  const r = canvas.parentElement.getBoundingClientRect();
+  zoomTo(fitScale() * BOOST, r.left + r.width / 2, r.top + r.height / 2);
+}
+
+function applyBoostLater(ms) {
+  clearTimeout(boostTimer);
+  boostTimer = setTimeout(applyBoost, ms);
+}
+
+addEventListener("resize", () => {
+  if (zoomMode === "boost") applyBoostLater(1200);
+  else if (zoomMode === "fit" && rfb) rfb.scaleViewport = true;
+});
 
 // ----- Picture-in-Picture: mirror the canvas into an always-on-top mini
 // window, so the box stays watchable while another app is in focus.
@@ -237,6 +266,7 @@ function onGesture(ev) {
   if (t === "pinch") {
     const dist = Math.hypot(ev.detail.magnitudeX, ev.detail.magnitudeY);
     if (ev.type === "gesturestart") {
+      zoomMode = "manual";
       pinchStart = { dist: dist || 1, scale: scale() };
     } else if (ev.type === "gesturemove" && pinchStart) {
       zoomTo(pinchStart.scale * dist / pinchStart.dist, ev.detail.clientX, ev.detail.clientY);
@@ -257,6 +287,8 @@ function hookCanvas() {
   for (const type of ["gesturestart", "gesturemove", "gestureend"]) {
     canvas.addEventListener(type, onGesture, true);
   }
+  new MutationObserver(() => applyBoostLater(150))
+    .observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
 }
 
 // ----- touchpad for coarse pointers: manual mode drives a laptop-style
@@ -360,6 +392,7 @@ function padTwoMove() {
   if (twoMode.type === "undecided") {
     if (Math.max(Math.hypot(d1x, d1y), Math.hypot(d2x, d2y)) < DECIDE_SLOP) return;
     twoMode.type = d1x * d2x + d1y * d2y < 0 ? "pinch" : "scroll";
+    if (twoMode.type === "pinch") zoomMode = "manual";
     twoMode.dist = Math.hypot(t1.x - t2.x, t1.y - t2.y);
     twoMode.ax = (d1x + d2x) / 2;   // travel origin for wheel/pan accounting
     twoMode.ay = (d1y + d2y) / 2;
@@ -488,9 +521,13 @@ function connect() {
   rfb = new RFB(screen, `${proto}://${location.host}/websockify`);
   rfb.viewOnly = !manual;
   rfb.scaleViewport = true;
+  rfb.resizeSession = true;
   rfb.addEventListener("connect", () => {
     online = true;
     hookCanvas();
+    setTimeout(() => { if (rfb) rfb._requestRemoteResize(); }, 600);
+    setTimeout(() => { if (rfb) rfb._requestRemoteResize(); }, 2500);
+    applyBoostLater(900);
     if (canvas.captureStream) pipAttach();   // warm stream for the PiP window
     else pipButton.hidden = true;
     render();

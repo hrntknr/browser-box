@@ -26,11 +26,10 @@ CHROME_ARGS="--user-data-dir=/data/profile \
 --hide-crash-restore-bubble --start-maximized $GL_ARGS about:blank"
 
 rm -f /tmp/.X99-lock
-Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp &
-XVFB_PID=$!
+Xvnc "$DISPLAY" -geometry 1920x1080 -depth 24 -rfbport 5900 -nolisten tcp \
+  -localhost -SecurityTypes None -AlwaysShared &
+XVNC_PID=$!
 fluxbox >/dev/null 2>&1 &
-x11vnc -display "$DISPLAY" -forever -shared -nopw -localhost -quiet &
-X11VNC_PID=$!
 websockify --web=/usr/share/novnc "${NOVNC_BIND:-127.0.0.1}:6080" localhost:5900 &
 WS_PID=$!
 
@@ -50,8 +49,7 @@ FWD_PID=$!
 google-chrome-stable $CHROME_ARGS &
 
 while :; do
-  kill -0 "$XVFB_PID" 2>/dev/null || exit 1
-  kill -0 "$X11VNC_PID" 2>/dev/null || exit 1
+  kill -0 "$XVNC_PID" 2>/dev/null || exit 1
   kill -0 "$WS_PID" 2>/dev/null || exit 1
   kill -0 "$FWD_PID" 2>/dev/null || exit 1
   sleep 5
