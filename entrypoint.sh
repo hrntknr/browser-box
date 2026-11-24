@@ -69,24 +69,21 @@ node -e 'const fs=require("fs");const p="/data/profile/Default/Preferences";let 
 CHROME_PID=$!
 
 # Minimize containment: there is no taskbar to restore a window from, so
-# any iconified window is deiconified again right away. A main Chrome
-# window left in normal state (e.g. after a minimize/restore race) stops
-# following framebuffer resizes, so near-full-size Chrome windows are
-# pulled back to maximized; small windows (picture-in-picture) are not.
+# any iconified window is deiconified again right away. A Chrome window
+# left in normal state (e.g. after a minimize/restore race, or a session
+# restore with a saved normal placement) stops following framebuffer
+# resizes, so Chrome windows are pulled back to maximized.
 (
   while :; do
     sleep 2
     for id in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]\+'); do
-      if xprop -id "$id" _NET_WM_STATE 2>/dev/null | grep -q _NET_WM_STATE_HIDDEN; then
+      state=$(xprop -id "$id" _NET_WM_STATE 2>/dev/null || true)
+      if echo "$state" | grep -q _NET_WM_STATE_HIDDEN; then
         wmctrl -i -r "$id" -b remove,hidden 2>/dev/null || true
+        continue
       fi
-    done
-    geo=$(xprop -root _NET_DESKTOP_GEOMETRY 2>/dev/null | grep -o '[0-9]\+' || true)
-    dw=$(echo "$geo" | sed -n 1p); dh=$(echo "$geo" | sed -n 2p)
-    [ -n "$dw" ] && [ -n "$dh" ] || continue
-    wmctrl -l -G -x 2>/dev/null | grep -i google-chrome | while read -r id _desk _x _y w h _class _rest; do
-      if [ "${w:-0}" -ge $((dw - 2)) ] || [ "${h:-0}" -ge $((dh - 2)) ]; then
-        xprop -id "$id" _NET_WM_STATE 2>/dev/null | grep -q _NET_WM_STATE_MAXIMIZED_HORZ || \
+      if xprop -id "$id" WM_CLASS 2>/dev/null | grep -qi google-chrome; then
+        echo "$state" | grep -q _NET_WM_STATE_MAXIMIZED_HORZ || \
           wmctrl -i -r "$id" -b add,maximized_vert,maximized_horz 2>/dev/null || true
       fi
     done
