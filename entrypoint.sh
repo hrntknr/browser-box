@@ -81,7 +81,7 @@ CHROME_PID=$!
         wmctrl -i -r "$id" -b remove,hidden 2>/dev/null || true
       fi
     done
-    geo=$(xprop -root _NET_DESKTOP_GEOMETRY 2>/dev/null | grep -o '[0-9]\+')
+    geo=$(xprop -root _NET_DESKTOP_GEOMETRY 2>/dev/null | grep -o '[0-9]\+' || true)
     dw=$(echo "$geo" | sed -n 1p); dh=$(echo "$geo" | sed -n 2p)
     [ -n "$dw" ] && [ -n "$dh" ] || continue
     wmctrl -l -G -x 2>/dev/null | grep -i google-chrome | while read -r id _desk _x _y w h _class _rest; do
