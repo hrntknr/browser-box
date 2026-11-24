@@ -25,6 +25,7 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 
 RUN npx --yes playwright install chrome
 
+COPY ui/index.html /usr/share/novnc/index.html
 COPY entrypoint.sh /app/entrypoint.sh
 EXPOSE 9222 6080
 
