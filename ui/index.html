@@ -55,9 +55,10 @@
   }
 
   @media (pointer: coarse) {
-    #bar { top: auto; bottom: max(14px, env(safe-area-inset-bottom)); gap: 6px; }
+    #bar { top: auto; bottom: max(14px, env(safe-area-inset-bottom)); gap: 6px;
+      flex-wrap: wrap; justify-content: center; }
     #label { display: none; }
-    button { min-height: 44px; min-width: 44px; padding: 10px 12px; font-size: 15px; }
+    button { min-height: 44px; min-width: 44px; padding: 10px 11px; font-size: 14px; }
   }
   #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
   #pip[data-on="true"] { background: #1f6feb; color: #fff; }
@@ -559,7 +560,8 @@ function phoneStart(id, x, y) {
     if (phDragBtn) { phoneButton(ph1.x, ph1.y, 0); phDragBtn = false; }
     ph1.mode = "two";
     ph2 = { id, x0: x, y0: y, x, y };
-    phTwo = { type: "undecided", z: scale(), dist: 1, cx: 0, cy: 0, ax: 0, ay: 0 };
+    phTwo = { type: "undecided", z: scale(), dist: 1,
+      dist0: Math.hypot(ph1.x - x, ph1.y - y) || 1, cx: 0, cy: 0, ax: 0, ay: 0 };
   }
 }
 
@@ -598,9 +600,13 @@ function phoneTwoMove() {
   const d2x = ph2.x - ph2.x0, d2y = ph2.y - ph2.y0;
   if (phTwo.type === "undecided") {
     if (Math.max(Math.hypot(d1x, d1y), Math.hypot(d2x, d2y)) < DECIDE_SLOP) return;
-    phTwo.type = d1x * d2x + d1y * d2y < 0 ? "pinch" : "scroll";
+    // the dot product alone misreads a pinch when only one finger has
+    // reported movement so far; a growing or shrinking span is a pinch too
+    const distNow = Math.hypot(ph1.x - ph2.x, ph1.y - ph2.y);
+    phTwo.type = Math.abs(distNow - phTwo.dist0) > 10
+      || d1x * d2x + d1y * d2y < 0 ? "pinch" : "scroll";
     if (phTwo.type === "pinch") zoomMode = "manual";
-    phTwo.dist = Math.hypot(ph1.x - ph2.x, ph1.y - ph2.y) || 1;
+    phTwo.dist = distNow || 1;
     phTwo.cx = (ph1.x + ph2.x) / 2;
     phTwo.cy = (ph1.y + ph2.y) / 2;
     phTwo.ax = (d1x + d2x) / 2;
