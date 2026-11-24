@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # stock noVNC refuses SetDesktopSize while view-only; allow it so the remote
 # resolution follows the viewer window even before handover
-RUN node -e 'const fs=require("fs");const p="/usr/share/novnc/core/rfb.js";let s=fs.readFileSync(p,"utf8");const t="if (!this._resizeSession || this._viewOnly ||";if(!s.includes(t)){console.error("rfb.js patch target not found");process.exit(1)}fs.writeFileSync(p,s.replace(t,"if (!this._resizeSession ||"))'
+RUN node -e 'const fs=require("fs");const p="/usr/share/novnc/core/rfb.js";let s=fs.readFileSync(p,"utf8");const t="if (!this._resizeSession) {\n            return;\n        }\n        if (this._viewOnly) {\n            return;\n        }";if(!s.includes(t)){console.error("rfb.js patch target not found");process.exit(1)}fs.writeFileSync(p,s.replace(t,"if (!this._resizeSession) {\n            return;\n        }"))'
 
 RUN mkdir -p /data/profile/Default \
     && printf '{"intl":{"accept_languages":"ja,en-US;q=0.9,en;q=0.8"}}' \
