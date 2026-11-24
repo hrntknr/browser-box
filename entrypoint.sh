@@ -21,7 +21,7 @@ if [ "$gpu" = 1 ]; then
 fi
 
 CHROME_ARGS="--user-data-dir=/data/profile \
---remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 \
+--remote-debugging-port=9223 \
 --no-first-run --no-default-browser-check --no-sandbox --test-type \
 --hide-crash-restore-bubble --start-maximized $GL_ARGS about:blank"
 
@@ -45,11 +45,14 @@ mkdir -p /run/dbus
 rm -f /run/dbus/pid /run/dbus/system_bus_socket   # stale after docker restart
 dbus-daemon --system --fork
 eval "$(dbus-launch --sh-syntax)"
+node -e 'const n=require("net");n.createServer(c=>{const u=n.connect(9223,"127.0.0.1");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).listen(9222,"0.0.0.0")' &
+FWD_PID=$!
 google-chrome-stable $CHROME_ARGS &
 
 while :; do
   kill -0 "$XVFB_PID" 2>/dev/null || exit 1
   kill -0 "$X11VNC_PID" 2>/dev/null || exit 1
   kill -0 "$WS_PID" 2>/dev/null || exit 1
+  kill -0 "$FWD_PID" 2>/dev/null || exit 1
   sleep 5
 done
