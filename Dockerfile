@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg locales dbus dbus-x11 \
-      tigervnc-standalone-server xfonts-base fluxbox novnc websockify \
+      tigervnc-standalone-server xfonts-base fluxbox novnc websockify x11-xserver-utils \
       fonts-noto-cjk fonts-vlgothic fonts-ipafont \
       xclip procps nodejs npm libvulkan1 vulkan-tools \
     && sed -i 's/^# *ja_JP.UTF-8 UTF-8/ja_JP.UTF-8 UTF-8/' /etc/locale.gen \
@@ -35,6 +35,8 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 RUN npx --yes playwright install chrome
 
 COPY fluxbox/ /root/.fluxbox/
+COPY fbsetbg /usr/bin/fbsetbg
+RUN chmod 755 /usr/bin/fbsetbg
 COPY ui/index.html /usr/share/novnc/index.html
 COPY entrypoint.sh /app/entrypoint.sh
 EXPOSE 9222 6080

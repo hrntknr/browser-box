@@ -1,2 +1,5 @@
 session.screen0.toolbar.visible: false
-session.screen0.rootCommand:
+session.screen0.rootCommand: xsetroot -solid rgb:1f/21/24
+session.screen0.defaultDeco: NONE
+session.screen0.titlebar.left:
+session.screen0.titlebar.right:
