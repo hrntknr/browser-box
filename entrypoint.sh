@@ -30,8 +30,10 @@ Xvnc "$DISPLAY" -geometry 1920x1080 -depth 24 -rfbport 5900 -nolisten tcp \
   -localhost -SecurityTypes None -AlwaysShared &
 XVNC_PID=$!
 fluxbox >/dev/null 2>&1 &
-websockify --web=/usr/share/novnc "${NOVNC_BIND:-127.0.0.1}:6080" localhost:5900 &
+websockify 127.0.0.1:6081 localhost:5900 &
 WS_PID=$!
+node --experimental-websocket /app/server.mjs &
+SRV_PID=$!
 
 until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.2; done
 
@@ -83,6 +85,7 @@ WATCH_PID=$!
 while :; do
   kill -0 "$XVNC_PID" 2>/dev/null || exit 1
   kill -0 "$WS_PID" 2>/dev/null || exit 1
+  kill -0 "$SRV_PID" 2>/dev/null || exit 1
   kill -0 "$FWD_PID" 2>/dev/null || exit 1
   kill -0 "$CHROME_PID" 2>/dev/null || exit 1
   kill -0 "$WATCH_PID" 2>/dev/null || exit 1

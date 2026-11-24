@@ -41,6 +41,7 @@ COPY fbsetbg /usr/bin/fbsetbg
 RUN chmod 755 /usr/bin/fbsetbg
 COPY ui/index.html /usr/share/novnc/index.html
 COPY entrypoint.sh /app/entrypoint.sh
+COPY server.mjs /app/server.mjs
 EXPOSE 9222 6080
 
 CMD ["/bin/sh", "/app/entrypoint.sh"]

@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, maximum-scale=1">
+<script>
+  // provisional touch-UI guess so the first paint is already laid out for
+  // the likely input kind; the module corrects it from real input events
+  if (matchMedia("(pointer: coarse)").matches)
+    document.documentElement.classList.add("touch-ui");
+</script>
 <title>browser-box</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230b0e14'/><circle cx='8' cy='8' r='4' fill='%2358a6ff'/></svg>">
 <style>
@@ -54,12 +60,17 @@
     #bar.idle:hover, #bar.idle:focus-within { opacity: 1; }
   }
 
-  @media (pointer: coarse) {
-    #bar { top: auto; bottom: max(14px, env(safe-area-inset-bottom)); gap: 6px;
-      flex-wrap: wrap; justify-content: center; border-radius: 24px; }
-    #label { display: none; }
-    button { min-height: 44px; min-width: 44px; padding: 10px 11px; font-size: 14px; }
+  /* touch UI: one compact row at the bottom; every control stays visible
+     without wrapping, so labels give way to icons and padding shrinks */
+  html.touch-ui #bar {
+    top: auto; bottom: max(14px, env(safe-area-inset-bottom));
+    flex-wrap: nowrap; gap: 4px; padding: 6px 8px;
   }
+  html.touch-ui #state { padding: 0; }
+  html.touch-ui #dot, html.touch-ui #label { display: none; }
+  html.touch-ui button { min-height: 40px; min-width: 38px; padding: 6px 8px; font-size: 13px; }
+  html.touch-ui #handover { padding: 6px 10px; }
+  button svg { display: block; margin: 0 auto; }
   #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
   #pip[data-on="true"] { background: #1f6feb; color: #fff; }
   #pc-size[data-on="true"] { background: #1f6feb; color: #fff; }
@@ -81,10 +92,10 @@
   <span id="state"><span id="dot"></span><span id="label">接続中…</span></span>
   <button id="zoom-out" title="縮小" aria-label="縮小">−</button>
   <button id="zoom-in" title="拡大" aria-label="拡大">＋</button>
-  <button id="zoom-fit" title="全体を表示" aria-label="全体を表示">全体</button>
+  <button id="zoom-fit" title="全体を表示" aria-label="全体を表示"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 1.5H1.5V6M10 1.5h4.5V6M14.5 10v4.5H10M1.5 10v4.5H6"/></svg></button>
   <button id="pc-size" title="PCサイズに固定" aria-label="PCサイズに固定" hidden>PC</button>
   <button id="pip" title="最前面の小窓で表示 (Picture-in-Picture)" aria-label="最前面の小窓で表示" hidden>PiP</button>
-  <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>キー</button>
+  <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>⌨</button>
   <button id="handover" data-mode="takeover" disabled>操作を引き継ぐ</button>
 </div>
 <script type="module">
@@ -100,8 +111,50 @@ const pipButton = document.getElementById("pip");
 const kbdButton = document.getElementById("soft-keyboard");
 const kbdInput = document.getElementById("kbd-input");
 const pcButton = document.getElementById("pc-size");
-const coarse = matchMedia("(pointer: coarse)").matches;
 const MAX_ZOOM = 5;
+
+// ----- which input kind drives: the pointer type of the input the user
+// actually makes, not a media-query guess. matchMedia only seeds the
+// provisional state (and the pre-paint layout class in <head>); the first
+// real pointerdown settles it, and it keeps following the latest input.
+
+let inputTouch = matchMedia("(pointer: coarse)").matches;
+
+function setInputTouch(t) {
+  if (t !== inputTouch) {
+    inputTouch = t;
+    document.documentElement.classList.toggle("touch-ui", t);
+    updatePhoneMode();
+  }
+  render();
+}
+
+document.addEventListener("pointerdown", ev => {
+  if (ev.pointerType === "touch") setInputTouch(true);
+  else if (ev.pointerType) setInputTouch(false);   // mouse and pen are cursor input
+}, true);
+document.addEventListener("touchstart", () => setInputTouch(true),
+  { capture: true, passive: true });
+
+// ----- while the phone viewer is operating, the box's Chrome is put in
+// touch mode (CDP touch emulation, applied by the in-box server that this
+// page reports to): a one-finger drag then touch-scrolls the page instead
+// of dragging the mouse. Anything else — desktop viewer, watching only,
+// disconnected — reports cursor, so the box stays a plain mouse browser
+// for pointer users and for CDP automation.
+
+let emuWant = null;
+function reportMode() {
+  const want = phoneMode && manual && online ? "touch" : "cursor";
+  if (want === emuWant) return;
+  emuWant = want;
+  fetch("/bb-mode", { method: "POST", body: want, keepalive: true })
+    .catch(() => { emuWant = null; });
+}
+addEventListener("pagehide", () => {
+  if (emuWant === "touch")
+    fetch("/bb-mode", { method: "POST", body: "cursor", keepalive: true }).catch(() => {});
+});
 
 let rfb = null;
 let canvas = null;
@@ -119,13 +172,14 @@ function render() {
   pipButton.disabled = !online && !pipActive();   // keep the exit path open in PiP
   handover.dataset.mode = manual ? "return" : "takeover";
   handover.textContent = manual
-    ? (coarse ? "戻す" : "agent に戻す")
-    : (coarse ? "引き継ぐ" : "操作を引き継ぐ");
-  kbdButton.hidden = !(manual && online) || !coarse;
+    ? (inputTouch ? "戻す" : "agent に戻す")
+    : (inputTouch ? "引き継ぐ" : "操作を引き継ぐ");
+  kbdButton.hidden = !(manual && online) || !inputTouch;
   if (!manual || !online) kbdInput.blur();
   pcButton.hidden = !(phoneMode || forcePc);
   if (forcePc) pcButton.dataset.on = "true"; else delete pcButton.dataset.on;
   syncPad();
+  reportMode();
 }
 
 // ----- viewer zoom & pan (via noVNC Display.scale so input mapping stays exact) -----
@@ -199,8 +253,11 @@ function applyBoostLater(ms) {
   boostTimer = setTimeout(applyBoost, ms);
 }
 
+let sizeDebounce = 0;
 addEventListener("resize", () => {
   updatePhoneMode();
+  clearTimeout(sizeDebounce);
+  sizeDebounce = setTimeout(ensureRemoteSize, 400);
   if (zoomMode === "boost") applyBoostLater(1200);
   else if (zoomMode === "fit" && rfb) rfb.scaleViewport = true;
 });
@@ -360,7 +417,7 @@ function padReset() {
 }
 
 function syncPad() {
-  if (!coarse || !online) { padReset(); padX = null; return; }
+  if (!inputTouch || !online) { padReset(); padX = null; return; }
   if (phoneMode) {
     // direct touch drives the remote pointer itself; no trackpad cursor
     padReset(); padX = null;
@@ -466,7 +523,7 @@ function padEnd(id, x, y) {
 }
 
 function onPadTouch(ev) {
-  if (!coarse || !online || phoneMode) return;
+  if (!inputTouch || !online || phoneMode) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
   poke();
@@ -496,7 +553,7 @@ let ph1 = null, ph2 = null, phTwo = null;
 let phDragBtn = false;
 
 function updatePhoneMode() {
-  const next = coarse && innerWidth <= PHONE_MAX_WIDTH;
+  const next = inputTouch && innerWidth <= PHONE_MAX_WIDTH;
   if (next === phoneMode) return;
   phoneMode = next;
   padReset(); padX = null;
@@ -689,6 +746,43 @@ for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
 const PC_SIZE = { w: 1440, h: 900 };
 let forcePc = false;
 
+// ----- keep the remote size honest. A SetDesktopSize request can be
+// swallowed by noVNC's one-pending-request gate when its acknowledgement
+// never arrives (a request that changes nothing is not always answered),
+// after which every later request is dropped and the size wedges — the
+// PC toggle's release ran into exactly that. So don't fire once and
+// trust it: while the framebuffer differs from the size it should have,
+// clear a stale pending flag and re-request, until it matches.
+
+function desiredFbSize() {
+  if (forcePc) return PC_SIZE;
+  const r = screen.getBoundingClientRect();
+  return { w: Math.max(Math.floor(r.width), MIN_FB_WIDTH), h: Math.floor(r.height) };
+}
+
+function fbMatches() {
+  if (!canvas) return true;
+  const want = desiredFbSize();
+  return canvas.width === want.w && canvas.height === want.h;
+}
+
+function ensureRemoteSize() {
+  if (!rfb || !canvas || fbMatches()) return;
+  if (rfb._pendingRemoteResize && Date.now() - (rfb._lastResize || 0) > 1500)
+    rfb._pendingRemoteResize = false;   // its ack is never coming; unstick the gate
+  rfb._requestRemoteResize();
+}
+
+let sizeTimer = 0;
+function ensureRemoteSizeSoon() {
+  clearInterval(sizeTimer);
+  let n = 0;
+  sizeTimer = setInterval(() => {
+    ensureRemoteSize();
+    if (fbMatches() || ++n >= 12) clearInterval(sizeTimer);
+  }, 500);
+}
+
 function setForcePc(on) {
   forcePc = on;
   if (rfb) {
@@ -696,13 +790,13 @@ function setForcePc(on) {
       window.BB_FORCE_SIZE = PC_SIZE;
       zoomMode = "fit";
       rfb.scaleViewport = true;
-      rfb._requestRemoteResize();
     } else {
       delete window.BB_FORCE_SIZE;
       zoomMode = "boost";
-      rfb._requestRemoteResize();
       applyBoostLater(300);
     }
+    ensureRemoteSize();
+    ensureRemoteSizeSoon();
   }
   render();
 }
@@ -778,8 +872,7 @@ function connect() {
     online = true;
     if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;   // re-assert after a reconnect
     hookCanvas();
-    setTimeout(() => { if (rfb) rfb._requestRemoteResize(); }, 600);
-    setTimeout(() => { if (rfb) rfb._requestRemoteResize(); }, 2500);
+    ensureRemoteSizeSoon();
     applyBoostLater(900);
     if (canvas.captureStream) pipAttach();   // warm stream for the PiP window
     else pipButton.hidden = true;
