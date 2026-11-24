@@ -168,16 +168,24 @@ document.getElementById("zoom-fit").addEventListener("click", () => {
 // ----- default view: the remote resolution follows this window
 // (resizeSession; the stock view-only block is patched out in the image).
 // BOOST is a slight enlargement on top of the fit scale, re-applied
-// whenever the framebuffer or the window changes size -----
+// whenever the framebuffer or the window changes size.
+// The framebuffer width is floored at MIN_FB_WIDTH (the rfb.js patch in
+// the image reads BB_MIN_FB_WIDTH) because the remote Chrome window
+// cannot go narrower; below the floor the view fits the whole desktop
+// scaled down instead of boosting past its edges -----
 
 const BOOST = 1.08;
+const MIN_FB_WIDTH = 508;
+window.BB_MIN_FB_WIDTH = MIN_FB_WIDTH;
 let zoomMode = "boost";
 let boostTimer = 0;
 
 function applyBoost() {
   if (!canvas || !rfb || zoomMode !== "boost") return;
-  const r = canvas.parentElement.getBoundingClientRect();
-  zoomTo(fitScale() * BOOST, r.left + r.width / 2, r.top + r.height / 2);
+  const cont = canvas.parentElement;
+  const r = cont.getBoundingClientRect();
+  const f = cont.clientWidth < MIN_FB_WIDTH ? 1 : BOOST;
+  zoomTo(fitScale() * f, r.left + r.width / 2, r.top + r.height / 2);
 }
 
 function applyBoostLater(ms) {

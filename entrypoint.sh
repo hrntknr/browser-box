@@ -46,11 +46,23 @@ dbus-daemon --system --fork
 eval "$(dbus-launch --sh-syntax)"
 node -e 'const n=require("net");n.createServer(c=>{const u=n.connect(9223,"127.0.0.1");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).listen(9222,"0.0.0.0")' &
 FWD_PID=$!
-google-chrome-stable $CHROME_ARGS &
+
+# Chrome supervisor: closing the last tab exits Chrome, so relaunch it.
+# Singleton cleanup is safe here because the loop only runs while Chrome
+# is down. Container shutdown kills PID 1 and the whole namespace with it.
+(
+  while :; do
+    rm -f /data/profile/Singleton*
+    google-chrome-stable $CHROME_ARGS || true
+    sleep 2
+  done
+) &
+CHROME_PID=$!
 
 while :; do
   kill -0 "$XVNC_PID" 2>/dev/null || exit 1
   kill -0 "$WS_PID" 2>/dev/null || exit 1
   kill -0 "$FWD_PID" 2>/dev/null || exit 1
+  kill -0 "$CHROME_PID" 2>/dev/null || exit 1
   sleep 5
 done
