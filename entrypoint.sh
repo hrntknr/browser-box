@@ -31,13 +31,15 @@ XVFB_PID=$!
 fluxbox >/dev/null 2>&1 &
 x11vnc -display "$DISPLAY" -forever -shared -nopw -localhost -quiet &
 X11VNC_PID=$!
-websockify --web=/usr/share/novnc 127.0.0.1:6080 localhost:5900 &
+websockify --web=/usr/share/novnc "${NOVNC_BIND:-127.0.0.1}:6080" localhost:5900 &
 WS_PID=$!
 
 until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.2; done
 
-apt-get update -qq
-npx --yes playwright install chrome
+if ! command -v google-chrome-stable >/dev/null 2>&1; then
+  apt-get update -qq
+  npx --yes playwright install chrome
+fi
 rm -f /data/profile/Singleton*
 mkdir -p /run/dbus
 rm -f /run/dbus/pid /run/dbus/system_bus_socket   # stale after docker restart

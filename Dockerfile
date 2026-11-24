@@ -23,6 +23,8 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
     && printf '{"ExtensionInstallForcelist":["mfnicocicmmlkpjnaffgihfjhdgjkdjg;https://clients2.google.com/service/update2/crx"]}' \
        > /etc/opt/chrome/policies/managed/browse.json
 
+RUN npx --yes playwright install chrome
+
 COPY entrypoint.sh /app/entrypoint.sh
 EXPOSE 9222 6080
 
