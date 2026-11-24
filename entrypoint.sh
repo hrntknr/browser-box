@@ -47,6 +47,13 @@ eval "$(dbus-launch --sh-syntax)"
 node -e 'const n=require("net");n.createServer(c=>{const u=n.connect(9223,"127.0.0.1");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).listen(9222,"0.0.0.0")' &
 FWD_PID=$!
 
+# Keep Chrome on the system frame: with its own frame it draws minimize /
+# maximize / close buttons that fluxbox cannot strip, while the system
+# frame gets Deco NONE like every other window. The profile lives on a
+# volume, so merge the pref in at every start instead of relying on the
+# seeded Preferences in the image.
+node -e 'const fs=require("fs");const p="/data/profile/Default/Preferences";let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){}if(!j.browser)j.browser={};j.browser.custom_chrome_frame=false;fs.mkdirSync("/data/profile/Default",{recursive:true});fs.writeFileSync(p,JSON.stringify(j))' || true
+
 # Chrome supervisor: closing the last tab exits Chrome, so relaunch it.
 # Singleton cleanup is safe here because the loop only runs while Chrome
 # is down. Container shutdown kills PID 1 and the whole namespace with it.
@@ -59,10 +66,25 @@ FWD_PID=$!
 ) &
 CHROME_PID=$!
 
+# Minimize containment: there is no taskbar to restore a window from, so
+# any iconified window is deiconified again right away.
+(
+  while :; do
+    sleep 2
+    for id in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]\+'); do
+      if xprop -id "$id" _NET_WM_STATE 2>/dev/null | grep -q _NET_WM_STATE_HIDDEN; then
+        wmctrl -i -r "$id" -b remove,hidden 2>/dev/null || true
+      fi
+    done
+  done
+) &
+WATCH_PID=$!
+
 while :; do
   kill -0 "$XVNC_PID" 2>/dev/null || exit 1
   kill -0 "$WS_PID" 2>/dev/null || exit 1
   kill -0 "$FWD_PID" 2>/dev/null || exit 1
   kill -0 "$CHROME_PID" 2>/dev/null || exit 1
+  kill -0 "$WATCH_PID" 2>/dev/null || exit 1
   sleep 5
 done

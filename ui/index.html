@@ -61,6 +61,7 @@
   }
   #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
   #pip[data-on="true"] { background: #1f6feb; color: #fff; }
+  #pc-size[data-on="true"] { background: #1f6feb; color: #fff; }
 
   /* hidden input that summons the on-screen keyboard; kept in the top band so
      iOS never has to scroll for it while the keyboard is open */
@@ -80,6 +81,7 @@
   <button id="zoom-out" title="縮小" aria-label="縮小">−</button>
   <button id="zoom-in" title="拡大" aria-label="拡大">＋</button>
   <button id="zoom-fit" title="全体を表示" aria-label="全体を表示">全体</button>
+  <button id="pc-size" title="PCサイズに固定" aria-label="PCサイズに固定" hidden>PC</button>
   <button id="pip" title="最前面の小窓で表示 (Picture-in-Picture)" aria-label="最前面の小窓で表示" hidden>PiP</button>
   <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>キー</button>
   <button id="handover" data-mode="takeover" disabled>操作を引き継ぐ</button>
@@ -96,6 +98,7 @@ const handover = document.getElementById("handover");
 const pipButton = document.getElementById("pip");
 const kbdButton = document.getElementById("soft-keyboard");
 const kbdInput = document.getElementById("kbd-input");
+const pcButton = document.getElementById("pc-size");
 const coarse = matchMedia("(pointer: coarse)").matches;
 const MAX_ZOOM = 5;
 
@@ -119,6 +122,8 @@ function render() {
     : (coarse ? "引き継ぐ" : "操作を引き継ぐ");
   kbdButton.hidden = !(manual && online) || !coarse;
   if (!manual || !online) kbdInput.blur();
+  pcButton.hidden = !(phoneMode || forcePc);
+  if (forcePc) pcButton.dataset.on = "true"; else delete pcButton.dataset.on;
   syncPad();
 }
 
@@ -194,6 +199,7 @@ function applyBoostLater(ms) {
 }
 
 addEventListener("resize", () => {
+  updatePhoneMode();
   if (zoomMode === "boost") applyBoostLater(1200);
   else if (zoomMode === "fit" && rfb) rfb.scaleViewport = true;
 });
@@ -354,6 +360,14 @@ function padReset() {
 
 function syncPad() {
   if (!coarse || !online) { padReset(); padX = null; return; }
+  if (phoneMode) {
+    // direct touch drives the remote pointer itself; no trackpad cursor
+    padReset(); padX = null;
+    if (rfb && rfb._cursor) {
+      rfb._cursor._canvas.style.visibility = manual ? "" : "hidden";
+    }
+    return;
+  }
   // the trackpad cursor exists only while operating — reading is just pan & zoom
   rfb._cursor._canvas.style.visibility = manual ? "" : "hidden";
   if (!manual) { padReset(); padX = null; return; }
@@ -451,7 +465,7 @@ function padEnd(id, x, y) {
 }
 
 function onPadTouch(ev) {
-  if (!coarse || !online) return;
+  if (!coarse || !online || phoneMode) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
   poke();
@@ -464,6 +478,230 @@ function onPadTouch(ev) {
 for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
   screen.addEventListener(type, onPadTouch, true);
 }
+
+// ----- smartphone mode: on a phone-sized coarse viewer the touchpad gives
+// way to direct touch — a tap clicks where the finger is, one finger drags
+// the remote pointer itself, two fingers scroll (wheel) or pinch-zoom, and
+// while pinch-zoomed one finger pans the view (a long-press first turns
+// that drag into a remote drag instead). Read-only mode just pans & zooms.
+
+const PHONE_MAX_WIDTH = 860;
+const PH_TAP_MS = 350;
+const PH_SLOP = 12;
+const PH_LONG_MS = 450;
+
+let phoneMode = false;
+let ph1 = null, ph2 = null, phTwo = null;
+let phDragBtn = false;
+
+function updatePhoneMode() {
+  const next = coarse && innerWidth <= PHONE_MAX_WIDTH;
+  if (next === phoneMode) return;
+  phoneMode = next;
+  padReset(); padX = null;
+  phoneReset();
+  render();
+}
+
+function zoomedIn() {
+  return zoomMode === "manual" && canvas && scale() > fitScale() * 1.02;
+}
+
+/* client (viewport) coords -> canvas element coords, as noVNC expects */
+function toElement(x, y) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: Math.min(Math.max(x - r.left, 0), r.width - 1),
+    y: Math.min(Math.max(y - r.top, 0), r.height - 1),
+  };
+}
+
+function phoneMoveTo(x, y) {
+  if (!canvas || !rfb) return;
+  const p = toElement(x, y);
+  rfb._fakeMouseMove({ detail: { clientX: x, clientY: y } }, p.x, p.y);
+}
+
+function phoneButton(x, y, mask) {
+  if (!canvas || !rfb) return;
+  const p = toElement(x, y);
+  rfb._handleMouseButton(p.x, p.y, mask);
+}
+
+function phoneWheel(x, y, mask) {
+  phoneMoveTo(x, y);
+  phoneButton(x, y, mask);
+  phoneButton(x, y, 0);
+}
+
+function phoneReset() {
+  if (ph1 && ph1.longTimer) clearTimeout(ph1.longTimer);
+  if (phDragBtn && rfb) phoneButton(ph1 ? ph1.x : 0, ph1 ? ph1.y : 0, 0);
+  phDragBtn = false;
+  ph1 = ph2 = phTwo = null;
+}
+
+function phoneStart(id, x, y) {
+  if (!ph1) {
+    ph1 = { id, x0: x, y0: y, x, y, start: Date.now(), mode: "undecided", longTimer: 0 };
+    if (!manual) return;
+    phoneMoveTo(x, y);
+    // a held finger arms a remote drag even while zoomed (where a plain
+    // drag would pan); moving first still decides by the rules in phoneMove
+    ph1.longTimer = setTimeout(() => {
+      if (!ph1 || ph1.mode !== "undecided") return;
+      ph1.mode = "drag";
+      phoneButton(ph1.x0, ph1.y0, 0x1);
+      phDragBtn = true;
+    }, PH_LONG_MS);
+  } else if (!ph2 && !phTwo) {
+    if (ph1.longTimer) { clearTimeout(ph1.longTimer); ph1.longTimer = 0; }
+    if (phDragBtn) { phoneButton(ph1.x, ph1.y, 0); phDragBtn = false; }
+    ph1.mode = "two";
+    ph2 = { id, x0: x, y0: y, x, y };
+    phTwo = { type: "undecided", z: scale(), dist: 1, cx: 0, cy: 0, ax: 0, ay: 0 };
+  }
+}
+
+function phoneMove(id, x, y) {
+  const t = ph1 && ph1.id === id ? ph1 : ph2 && ph2.id === id ? ph2 : null;
+  if (!t) return;
+  const dx = x - t.x, dy = y - t.y;
+  t.x = x; t.y = y;
+  if (phTwo) { phoneTwoMove(); return; }
+  if (!ph1 || ph1.id !== id) return;
+  if (ph1.mode === "drag") { phoneMoveTo(x, y); return; }
+  if (ph1.mode === "pan") {
+    const cont = canvas.parentElement;
+    cont.scrollLeft -= dx;
+    cont.scrollTop -= dy;
+    return;
+  }
+  if (Math.hypot(x - ph1.x0, y - ph1.y0) <= PH_SLOP) return;
+  if (ph1.longTimer) { clearTimeout(ph1.longTimer); ph1.longTimer = 0; }
+  if (!manual || zoomedIn()) {
+    ph1.mode = "pan";
+    const cont = canvas.parentElement;
+    cont.scrollLeft -= dx;
+    cont.scrollTop -= dy;
+  } else {
+    ph1.mode = "drag";
+    phoneMoveTo(ph1.x0, ph1.y0);
+    phoneButton(ph1.x0, ph1.y0, 0x1);
+    phDragBtn = true;
+    phoneMoveTo(x, y);
+  }
+}
+
+function phoneTwoMove() {
+  const d1x = ph1.x - ph1.x0, d1y = ph1.y - ph1.y0;
+  const d2x = ph2.x - ph2.x0, d2y = ph2.y - ph2.y0;
+  if (phTwo.type === "undecided") {
+    if (Math.max(Math.hypot(d1x, d1y), Math.hypot(d2x, d2y)) < DECIDE_SLOP) return;
+    phTwo.type = d1x * d2x + d1y * d2y < 0 ? "pinch" : "scroll";
+    if (phTwo.type === "pinch") zoomMode = "manual";
+    phTwo.dist = Math.hypot(ph1.x - ph2.x, ph1.y - ph2.y) || 1;
+    phTwo.cx = (ph1.x + ph2.x) / 2;
+    phTwo.cy = (ph1.y + ph2.y) / 2;
+    phTwo.ax = (d1x + d2x) / 2;
+    phTwo.ay = (d1y + d2y) / 2;
+  }
+  if (phTwo.type === "pinch") {
+    const dist = Math.hypot(ph1.x - ph2.x, ph1.y - ph2.y);
+    if (dist > 0) zoomTo(phTwo.z * dist / phTwo.dist, phTwo.cx, phTwo.cy);
+  } else {
+    const ax = (d1x + d2x) / 2, ay = (d1y + d2y) / 2;
+    if (manual) {
+      const mx = (ph1.x + ph2.x) / 2, my = (ph1.y + ph2.y) / 2;
+      while (ay - phTwo.ay >= WHEEL_STEP) { phoneWheel(mx, my, 0x10); phTwo.ay += WHEEL_STEP; }
+      while (phTwo.ay - ay >= WHEEL_STEP) { phoneWheel(mx, my, 0x8); phTwo.ay -= WHEEL_STEP; }
+      while (ax - phTwo.ax >= WHEEL_STEP) { phoneWheel(mx, my, 0x40); phTwo.ax += WHEEL_STEP; }
+      while (phTwo.ax - ax >= WHEEL_STEP) { phoneWheel(mx, my, 0x20); phTwo.ax -= WHEEL_STEP; }
+    } else {
+      const cont = canvas.parentElement;
+      cont.scrollLeft -= ax - phTwo.ax;
+      cont.scrollTop -= ay - phTwo.ay;
+      phTwo.ax = ax;
+      phTwo.ay = ay;
+    }
+  }
+}
+
+function phoneEnd(id, x, y) {
+  if (phTwo) {
+    if ((ph1 && ph1.id === id) || (ph2 && ph2.id === id)) {
+      const tap = phTwo.type === "undecided"
+        && Date.now() - ph1.start < PH_TAP_MS + 150
+        && Math.hypot(ph1.x - ph1.x0, ph1.y - ph1.y0) <= PH_SLOP
+        && Math.hypot(ph2.x - ph2.x0, ph2.y - ph2.y0) <= PH_SLOP;
+      if (tap && manual) {
+        const mx = (ph1.x0 + ph2.x0) / 2, my = (ph1.y0 + ph2.y0) / 2;
+        phoneMoveTo(mx, my);
+        phoneButton(mx, my, 0x4);
+        phoneButton(mx, my, 0);
+      }
+      phoneReset();
+    }
+    return;
+  }
+  if (!ph1 || ph1.id !== id) return;
+  if (ph1.longTimer) clearTimeout(ph1.longTimer);
+  if (phDragBtn) {
+    phoneButton(x, y, 0);
+    phDragBtn = false;
+  } else if (manual && ph1.mode === "undecided"
+      && Date.now() - ph1.start < PH_TAP_MS
+      && Math.hypot(x - ph1.x0, y - ph1.y0) <= PH_SLOP) {
+    phoneMoveTo(x, y);
+    phoneButton(x, y, 0x1);
+    phoneButton(x, y, 0);
+  }
+  ph1 = null;
+}
+
+function onPhoneTouch(ev) {
+  if (!phoneMode || !online) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  poke();
+  if (ev.type === "touchcancel") { phoneReset(); return; }
+  const fn = ev.type === "touchstart" ? phoneStart
+    : ev.type === "touchmove" ? phoneMove : phoneEnd;
+  for (const t of ev.changedTouches) fn(t.identifier, t.clientX, t.clientY);
+}
+
+for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
+  screen.addEventListener(type, onPhoneTouch, true);
+}
+
+// ----- force PC size: pin the framebuffer at a desktop resolution (the
+// rfb.js patch in the image honours BB_FORCE_SIZE over the viewer size)
+// and fit it into the phone screen; tapping again hands sizing back to
+// the viewer. The button stays in the bar whenever phone mode is active
+// — and while forced — so there is always a way back.
+
+const PC_SIZE = { w: 1440, h: 900 };
+let forcePc = false;
+
+function setForcePc(on) {
+  forcePc = on;
+  if (rfb) {
+    if (on) {
+      window.BB_FORCE_SIZE = PC_SIZE;
+      zoomMode = "fit";
+      rfb.scaleViewport = true;
+      rfb._requestRemoteResize();
+    } else {
+      delete window.BB_FORCE_SIZE;
+      zoomMode = "boost";
+      rfb._requestRemoteResize();
+      applyBoostLater(300);
+    }
+  }
+  render();
+}
+
+pcButton.addEventListener("click", () => setForcePc(!forcePc));
 
 // ----- on-screen keyboard (noVNC Keyboard already handles virtual keys) -----
 
@@ -532,6 +770,7 @@ function connect() {
   rfb.resizeSession = true;
   rfb.addEventListener("connect", () => {
     online = true;
+    if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;   // re-assert after a reconnect
     hookCanvas();
     setTimeout(() => { if (rfb) rfb._requestRemoteResize(); }, 600);
     setTimeout(() => { if (rfb) rfb._requestRemoteResize(); }, 2500);
@@ -550,6 +789,7 @@ function connect() {
   });
 }
 
+updatePhoneMode();
 connect();
 render();
 </script>
