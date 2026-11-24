@@ -8,6 +8,7 @@ on:
       - entrypoint.sh
       - compose.yml
       - ui/**
+      - fluxbox/**
       - .github/workflows/image.yml
   workflow_dispatch:
 
