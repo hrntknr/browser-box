@@ -37,10 +37,6 @@ RUN mkdir -p /data/profile/Default \
     && printf '{"intl":{"accept_languages":"ja,en-US;q=0.9,en;q=0.8"},"browser":{"custom_chrome_frame":false}}' \
        > /data/profile/Default/Preferences
 
-RUN mkdir -p /etc/opt/chrome/policies/managed \
-    && printf '{"ExtensionInstallForcelist":["mfnicocicmmlkpjnaffgihfjhdgjkdjg;https://clients2.google.com/service/update2/crx"]}' \
-       > /etc/opt/chrome/policies/managed/browse.json
-
 RUN npx --yes playwright install chrome
 
 COPY fluxbox/ /root/.fluxbox/
