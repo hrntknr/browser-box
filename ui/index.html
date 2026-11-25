@@ -819,6 +819,26 @@ function ensureRemoteSize() {
   rfb._requestRemoteResize();
 }
 
+// TEMP diagnostic (round 7): beacon the resize state to the server log
+function bbDebug(tag) {
+  try {
+    const r = screen.getBoundingClientRect();
+    fetch("/bb-debug", { method: "POST", keepalive: true, body: JSON.stringify({
+      tag, forcePc,
+      ls: (() => { try { return localStorage.getItem("bb-force-pc"); } catch { return "?"; } })(),
+      cw: canvas ? canvas.width : -1, ch: canvas ? canvas.height : -1,
+      fbW: rfb ? rfb._fbWidth : -1, fbH: rfb ? rfb._fbHeight : -1,
+      pend: rfb ? !!rfb._pendingRemoteResize : null,
+      sup: rfb ? !!rfb._supportsSetDesktopSize : null,
+      rs: rfb ? !!rfb._resizeSession : null,
+      lastAge: rfb ? Date.now() - (rfb._lastResize || 0) : -1,
+      want: desiredFbSize(), scr: [Math.round(r.width), Math.round(r.height)],
+      on: online, man: manual, hid: document.hidden, vis: document.visibilityState,
+    }) }).catch(() => {});
+  } catch {}
+}
+setInterval(() => bbDebug("tick"), 2000);
+
 let sizeTimer = 0;
 function ensureRemoteSizeSoon() {
   clearInterval(sizeTimer);
@@ -885,6 +905,7 @@ function setForcePc(on) {
     ensureRemoteSizeSoon();
   }
   render();
+  bbDebug(on ? "pin-on" : "pin-off");
 }
 
 // one tap reaches us as a pointerup and then a click. The pointerup is
@@ -991,6 +1012,7 @@ function connect() {
     if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;   // re-assert after a reconnect
     hookCanvas();
     syncScreenHeight();
+    bbDebug("connect");
     ensureRemoteSizeSoon();
     applyFitLater(900);
     if (canvas.captureStream) pipAttach();   // warm stream for the PiP window

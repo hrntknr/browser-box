@@ -45,6 +45,12 @@ let mode = "cursor";                  // last mode reported by the viewer
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
+  if (url.pathname === "/bb-debug") {
+    let body = "";
+    req.on("data", c => { body += c; });
+    req.on("end", () => { log("debug", body.slice(0, 500)); res.writeHead(204).end(); });
+    return;
+  }
   if (url.pathname === "/bb-pointer") {
     // Xvnc sends a viewer the cursor shape only after pointer motion in
     // that viewer's own session, so a fresh viewer asks where the
