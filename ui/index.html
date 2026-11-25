@@ -17,7 +17,10 @@
     overscroll-behavior: none;
     font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif;
   }
-  #screen { position: fixed; inset: 0; }
+  /* height tracks the visible viewport (dvh), not the layout viewport:
+     on phones the two differ while browser chrome is shown, and a
+     layout-height screen leaves the fitted desktop partly off-screen */
+  #screen { position: fixed; inset: 0; height: 100vh; height: 100dvh; }
   /* all touch handling is driven by our code and noVNC's GestureHandler */
   #screen canvas { touch-action: none; }
   /* noVNC watches its screen div for size changes and resets any custom
@@ -269,13 +272,29 @@ function applyFitLater(ms) {
   }, ms);
 }
 
+/* keep #screen exactly as tall as the visible viewport: inset:0 alone
+   follows the layout viewport, which on phones can extend under the
+   browser chrome — the desktop would be fitted into an area whose
+   bottom is not visible. The framebuffer size derives from the screen
+   rect, so it follows the visible size too. */
+function syncScreenHeight() {
+  const vv = window.visualViewport;
+  if (!vv || !vv.height) return;
+  const h = Math.round(vv.height) + "px";
+  if (screen.style.height !== h) screen.style.height = h;
+}
+
 let sizeDebounce = 0;
-addEventListener("resize", () => {
+function onViewportResize() {
+  syncScreenHeight();
   updatePhoneMode();
   clearTimeout(sizeDebounce);
   sizeDebounce = setTimeout(ensureRemoteSize, 400);
   if (zoomMode === "fit" && rfb) rfb.scaleViewport = true;
-});
+}
+addEventListener("resize", onViewportResize);
+if (window.visualViewport)
+  visualViewport.addEventListener("resize", onViewportResize);
 
 // ----- Picture-in-Picture: mirror the canvas into an always-on-top mini
 // window, so the box stays watchable while another app is in focus.
@@ -811,7 +830,7 @@ function ensureRemoteSizeSoon() {
 // sizes agree), and ask again when the page comes back to the front.
 setInterval(ensureRemoteSize, 800);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) ensureRemoteSizeSoon();
+  if (!document.hidden) { syncScreenHeight(); ensureRemoteSizeSoon(); }
 });
 
 /* Xvnc sends the cursor shape only after pointer motion in this
@@ -957,6 +976,7 @@ function connect() {
     primeCursor();
     if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;   // re-assert after a reconnect
     hookCanvas();
+    syncScreenHeight();
     ensureRemoteSizeSoon();
     applyFitLater(900);
     if (canvas.captureStream) pipAttach();   // warm stream for the PiP window
@@ -973,6 +993,7 @@ function connect() {
   });
 }
 
+syncScreenHeight();
 updatePhoneMode();
 connect();
 render();
