@@ -108,7 +108,7 @@
 <button id="bar-handle" title="バーを表示" aria-label="バーを表示"><span id="handle-dot"></span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 10l5-5 5 5"/></svg></button>
 <script type="module">
 // iOS Safari reuses cached ES modules without revalidating; bump the ?v= whenever the rfb.js patch changes
-import RFB from "/core/rfb.js?v=9";
+import RFB from "/core/rfb.js?v=10";
 import Keyboard from "/core/input/keyboard.js";
 import { getKeysym } from "/core/input/util.js";
 
@@ -705,7 +705,9 @@ if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;
 function desiredFbSize() {
   if (forcePc) return PC_SIZE;
   const r = screen.getBoundingClientRect();
-  return { w: Math.max(Math.floor(r.width), MIN_FB_WIDTH), h: Math.floor(r.height) };
+  let w = r.width, h = r.height;
+  if (w > 0 && w < MIN_FB_WIDTH) { h = Math.round(h * MIN_FB_WIDTH / w); w = MIN_FB_WIDTH; }
+  return { w: Math.floor(w), h: Math.floor(h) };
 }
 
 function fbMatches() {
