@@ -784,7 +784,7 @@ for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
 // whenever phone mode is active — and while forced — so there is always
 // a way back.
 
-const PC_SIZE = { w: 1920, h: 1080 };
+const PC_SIZE = { w: 1920, h: 1280 };
 // the pin is a property of this viewer device, so it survives a page
 // reload: iOS discards and reloads heavy pages in the background, and
 // losing the pin on reload handed the sizing straight back to the phone
@@ -792,13 +792,9 @@ let forcePc = false;
 try { forcePc = localStorage.getItem("bb-force-pc") === "1"; } catch {}
 if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;
 
-// ----- keep the remote size honest. A SetDesktopSize request can be
-// swallowed by noVNC's one-pending-request gate when its acknowledgement
-// never arrives (a request that changes nothing is not always answered),
-// after which every later request is dropped and the size wedges — the
-// PC toggle's release ran into exactly that. So don't fire once and
-// trust it: while the framebuffer differs from the size it should have,
-// clear a stale pending flag and re-request, until it matches.
+// ----- keep the remote size honest: while the framebuffer differs from
+// the size it should have, keep asking. A request can be dropped while
+// another is pending, and nothing re-asks on its own after an error.
 
 function desiredFbSize() {
   if (forcePc) return PC_SIZE;
@@ -814,31 +810,8 @@ function fbMatches() {
 
 function ensureRemoteSize() {
   if (!rfb || !canvas || fbMatches()) return;
-  if (rfb._pendingRemoteResize && Date.now() - (rfb._lastResize || 0) > 1500)
-    rfb._pendingRemoteResize = false;   // its ack is never coming; unstick the gate
   rfb._requestRemoteResize();
 }
-
-// TEMP diagnostic (round 7): beacon the resize state to the server log
-function bbDebug(tag) {
-  try {
-    const r = screen.getBoundingClientRect();
-    fetch("/bb-debug", { method: "POST", keepalive: true, body: JSON.stringify({
-      tag, forcePc,
-      ls: (() => { try { return localStorage.getItem("bb-force-pc"); } catch { return "?"; } })(),
-      cw: canvas ? canvas.width : -1, ch: canvas ? canvas.height : -1,
-      fbW: rfb ? rfb._fbWidth : -1, fbH: rfb ? rfb._fbHeight : -1,
-      pend: rfb ? !!rfb._pendingRemoteResize : null,
-      sup: rfb ? !!rfb._supportsSetDesktopSize : null,
-      rs: rfb ? !!rfb._resizeSession : null,
-      lastAge: rfb ? Date.now() - (rfb._lastResize || 0) : -1,
-      want: desiredFbSize(), scr: [Math.round(r.width), Math.round(r.height)],
-      on: online, man: manual, hid: document.hidden, vis: document.visibilityState,
-    }) }).catch(() => {});
-  } catch {}
-}
-setInterval(() => bbDebug("tick"), 2000);
-
 let sizeTimer = 0;
 function ensureRemoteSizeSoon() {
   clearInterval(sizeTimer);
@@ -905,7 +878,6 @@ function setForcePc(on) {
     ensureRemoteSizeSoon();
   }
   render();
-  bbDebug(on ? "pin-on" : "pin-off");
 }
 
 // one tap reaches us as a pointerup and then a click. The pointerup is
@@ -1012,7 +984,6 @@ function connect() {
     if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;   // re-assert after a reconnect
     hookCanvas();
     syncScreenHeight();
-    bbDebug("connect");
     ensureRemoteSizeSoon();
     applyFitLater(900);
     if (canvas.captureStream) pipAttach();   // warm stream for the PiP window
