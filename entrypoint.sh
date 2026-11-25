@@ -29,13 +29,29 @@ rm -f /tmp/.X99-lock
 Xvnc "$DISPLAY" -geometry 1920x1080 -depth 24 -rfbport 5900 -nolisten tcp \
   -localhost -SecurityTypes None -AlwaysShared &
 XVNC_PID=$!
-fluxbox >/dev/null 2>&1 &
 websockify 127.0.0.1:6081 localhost:5900 &
 WS_PID=$!
 node --experimental-websocket /app/server.mjs &
 SRV_PID=$!
 
 until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.2; done
+
+# Window manager supervisor. fluxbox is not optional: with no WM, no
+# window is managed, maximize requests (the watchdog's wmctrl, CDP
+# setWindowBounds) go nowhere, and Chrome keeps its saved placement
+# while the framebuffer resizes around it. It used to be started once,
+# before X was accepting connections, and never supervised — losing
+# that startup race, or dying later, left the box WM-less for the rest
+# of the pod's life. Start it only once the X socket exists and
+# relaunch it when it exits; on (re)start it manages the existing
+# windows again and the watchdog below re-maximizes Chrome.
+(
+  while :; do
+    fluxbox >/dev/null 2>&1 || true
+    sleep 1
+  done
+) &
+FLUX_PID=$!
 
 if ! command -v google-chrome-stable >/dev/null 2>&1; then
   apt-get update -qq
@@ -110,6 +126,7 @@ WATCH_PID=$!
 
 while :; do
   kill -0 "$XVNC_PID" 2>/dev/null || exit 1
+  kill -0 "$FLUX_PID" 2>/dev/null || exit 1
   kill -0 "$WS_PID" 2>/dev/null || exit 1
   kill -0 "$SRV_PID" 2>/dev/null || exit 1
   kill -0 "$FWD_PID" 2>/dev/null || exit 1
