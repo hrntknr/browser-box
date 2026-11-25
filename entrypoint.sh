@@ -124,6 +124,39 @@ CHROME_PID=$!
 ) &
 WATCH_PID=$!
 
+# Graceful shutdown: as PID 1 this script only receives the signals it
+# traps, so without a trap a pod termination leaves Chrome to be
+# SIGKILLed at the end of the grace period with the profile mid-write.
+# Stop Chrome's supervisor first so nothing relaunches it, then close
+# Chrome over CDP: a plain SIGTERM counts as a crash to Chrome (it
+# leaves its Singleton lock behind), while Browser.close runs the full
+# shutdown. Keep X and the WM up until Chrome is out, and fall back to
+# SIGTERM if the close does not take.
+shutdown() {
+  trap - TERM INT
+  kill "$CHROME_PID" "$WATCH_PID" 2>/dev/null || true
+  node --experimental-websocket --input-type=module -e '
+    const ver = await (await fetch("http://127.0.0.1:9223/json/version")).json();
+    const ws = new WebSocket(ver.webSocketDebuggerUrl);
+    await new Promise((res, rej) => { ws.addEventListener("open", res, { once: true }); ws.addEventListener("error", rej, { once: true }); });
+    ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+  ' 2>/dev/null || true
+  i=0
+  while pgrep -x chrome >/dev/null 2>&1 && [ "$i" -lt 10 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  pkill -TERM -x chrome 2>/dev/null || true
+  i=0
+  while pgrep -x chrome >/dev/null 2>&1 && [ "$i" -lt 5 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  kill "$FLUX_PID" "$FWD_PID" "$SRV_PID" "$WS_PID" "$XVNC_PID" 2>/dev/null || true
+  exit 0
+}
+trap shutdown TERM INT
+
 while :; do
   kill -0 "$XVNC_PID" 2>/dev/null || exit 1
   kill -0 "$FLUX_PID" 2>/dev/null || exit 1
@@ -132,5 +165,5 @@ while :; do
   kill -0 "$FWD_PID" 2>/dev/null || exit 1
   kill -0 "$CHROME_PID" 2>/dev/null || exit 1
   kill -0 "$WATCH_PID" 2>/dev/null || exit 1
-  sleep 5
+  sleep 5 & wait $!
 done
