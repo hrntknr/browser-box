@@ -887,26 +887,27 @@ function setForcePc(on) {
   render();
 }
 
-// one tap reaches us as a pointerup and then a click, and the click can
-// trail the pointerup by a second or more when the main thread is busy
-// decoding frames — a short dedupe window then lets the same tap toggle
-// twice and cancel itself, which reads as a dead button. Guard both
-// paths with one shared lockout instead of timing the pair.
-let pcToggleAt = 0;
-function toggleForcePc() {
-  const now = Date.now();
-  if (now - pcToggleAt < 1500) return;
-  pcToggleAt = now;
-  setForcePc(!forcePc);
-}
+// one tap reaches us as a pointerup and then a click. The pointerup is
+// the reliable half: a click can be eaten outright, or delayed well past
+// a short dedupe window when the main thread is busy decoding frames —
+// and a late click then toggles a second time and cancels the tap, which
+// reads as a dead button. So the pointerup toggles and stamps the time,
+// and a click counts only when it is not the tail of such a tap (a mouse
+// or keyboard activation has no pointerup before it). A fresh tap's
+// pointerup is never suppressed, however soon it follows the last one.
+let pcTapAt = 0;
 pcButton.addEventListener("pointerup", ev => {
   if (ev.pointerType === "mouse") return;   // mouse activates via click
   const r = pcButton.getBoundingClientRect();   // a touch keeps capture on
   if (ev.clientX < r.left || ev.clientX > r.right  // its start element, so
       || ev.clientY < r.top || ev.clientY > r.bottom) return;  // check the lift point
-  toggleForcePc();
+  pcTapAt = Date.now();
+  setForcePc(!forcePc);
 });
-pcButton.addEventListener("click", toggleForcePc);
+pcButton.addEventListener("click", () => {
+  if (Date.now() - pcTapAt < 1500) return;   // tail of a tap that toggled
+  setForcePc(!forcePc);
+});
 
 // ----- on-screen keyboard (noVNC Keyboard already handles virtual keys) -----
 
