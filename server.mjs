@@ -85,10 +85,10 @@ const server = http.createServer((req, res) => {
     if (err || !st.isFile()) { res.writeHead(404).end("not found"); return; }
     const type = MIME[path.extname(file)] || "application/octet-stream";
     const headers = { "Content-Type": type, "Content-Length": st.size };
-    if (rel.endsWith(".html"))
-      headers["Cache-Control"] = "no-store";   // a stale viewer page must never survive a deploy
-    else if (type.startsWith("text/") || type === "application/json")
-      headers["Cache-Control"] = "no-cache";
+    // no-store on everything served: a stale viewer page — or a stale
+    // rfb.js module, which iOS Safari reuses without revalidating — must
+    // never survive a deploy
+    headers["Cache-Control"] = "no-store";
     res.writeHead(200, headers);
     if (req.method === "HEAD") { res.end(); return; }
     fs.createReadStream(file).pipe(res);
@@ -103,7 +103,7 @@ const server = http.createServer((req, res) => {
 // viewer page's own reconnects), put the desktop back to the standard
 // size, so the next viewer — or a CDP session, which is not a viewer —
 // starts from a sane desktop.
-const IDLE_W = 1920, IDLE_H = 1280;
+const IDLE_W = 1920, IDLE_H = 1080;
 const IDLE_GRACE_MS = 5000;
 let viewers = 0;
 let idleTimer = 0;
@@ -115,8 +115,8 @@ function restoreDesktopSize() {
   // Xvnc takes its framebuffer size from the RandR mode of its output.
   // The modeline timings are nominal (the display is virtual); creating
   // the mode again on later runs just fails and is ignored.
-  const modeline = ["206.75", "1920", "2056", "2264", "2608",
-                    "1280", "1283", "1288", "1340"];
+  const modeline = ["173.00", "1920", "2048", "2248", "2576",
+                    "1080", "1083", "1088", "1120"];
   execFile("xrandr", ["--newmode", mode, ...modeline], { env }, () => {
     execFile("xrandr", ["--addmode", "VNC-0", mode], { env }, () => {
       execFile("xrandr", ["--output", "VNC-0", "--mode", mode], { env },

@@ -26,7 +26,7 @@ CHROME_ARGS="--user-data-dir=/data/profile \
 --hide-crash-restore-bubble --start-maximized $GL_ARGS about:blank"
 
 rm -f /tmp/.X99-lock
-Xvnc "$DISPLAY" -geometry 1920x1280 -depth 24 -rfbport 5900 -nolisten tcp \
+Xvnc "$DISPLAY" -geometry 1920x1080 -depth 24 -rfbport 5900 -nolisten tcp \
   -localhost -SecurityTypes None -AlwaysShared &
 XVNC_PID=$!
 fluxbox >/dev/null 2>&1 &
