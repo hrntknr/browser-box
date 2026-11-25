@@ -21,7 +21,6 @@ const CDP_HTTP = "http://127.0.0.1:9223";
 
 const log = (...a) => console.log("[bb-server]", ...a);
 
-// ---------------------------------------------------------------- HTTP ---
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -95,7 +94,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-// ------------------------------------------------------- idle restore ---
 
 // With no viewer connected the desktop keeps whatever size the last
 // viewer asked for — a phone leaves it at phone size. Once the last
@@ -158,7 +156,6 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(HTTP_PORT, HTTP_HOST, () =>
   log(`http on ${HTTP_HOST}:${HTTP_PORT}, ws proxy -> 127.0.0.1:${WS_PORT}`));
 
-// ------------------------------------------------------- touch emulation ---
 
 let seq = 0;
 class CDP {
