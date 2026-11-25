@@ -36,15 +36,7 @@ SRV_PID=$!
 
 until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.2; done
 
-# Window manager supervisor. fluxbox is not optional: with no WM, no
-# window is managed, maximize requests (the watchdog's wmctrl, CDP
-# setWindowBounds) go nowhere, and Chrome keeps its saved placement
-# while the framebuffer resizes around it. It used to be started once,
-# before X was accepting connections, and never supervised — losing
-# that startup race, or dying later, left the box WM-less for the rest
-# of the pod's life. Start it only once the X socket exists and
-# relaunch it when it exits; on (re)start it manages the existing
-# windows again and the watchdog below re-maximizes Chrome.
+# fluxbox is supervised: with no WM, maximize requests go nowhere and Chrome stops following framebuffer resizes
 (
   while :; do
     fluxbox >/dev/null 2>&1 || true
@@ -65,16 +57,10 @@ eval "$(dbus-launch --sh-syntax)"
 node -e 'const n=require("net");n.createServer(c=>{const u=n.connect(9223,"127.0.0.1");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).listen(9222,"0.0.0.0")' &
 FWD_PID=$!
 
-# Keep Chrome on the system frame: with its own frame it draws minimize /
-# maximize / close buttons that fluxbox cannot strip, while the system
-# frame gets Deco NONE like every other window. The profile lives on a
-# volume, so merge the pref in at every start instead of relying on the
-# seeded Preferences in the image.
+# merge the pref at every start: the profile is a volume, so the seeded Preferences in the image is not what persists
 node -e 'const fs=require("fs");const p="/data/profile/Default/Preferences";let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){}if(!j.browser)j.browser={};j.browser.custom_chrome_frame=false;fs.mkdirSync("/data/profile/Default",{recursive:true});fs.writeFileSync(p,JSON.stringify(j))' || true
 
-# Chrome supervisor: closing the last tab exits Chrome, so relaunch it.
-# Singleton cleanup is safe here because the loop only runs while Chrome
-# is down. Container shutdown kills PID 1 and the whole namespace with it.
+# Singleton cleanup is safe here: this loop only runs while Chrome is down
 (
   while :; do
     rm -f /data/profile/Singleton*
@@ -84,16 +70,7 @@ node -e 'const fs=require("fs");const p="/data/profile/Default/Preferences";let 
 ) &
 CHROME_PID=$!
 
-# Minimize containment: there is no taskbar to restore a window from, so
-# any iconified window is deiconified again right away. A Chrome window
-# left in normal state (e.g. after a minimize/restore race, or a session
-# restore with a saved normal placement) stops following framebuffer
-# resizes, so Chrome windows are pulled back to maximized. The state
-# atoms alone cannot be trusted for this: a move/resize request sent to
-# a maximized window makes fluxbox shrink the window while keeping the
-# maximized atoms, and re-adding a state that is already set is a no-op,
-# so check the actual geometry against the desktop and clear the state
-# before re-adding it when the two disagree.
+# judge by geometry, not the state atoms: fluxbox can shrink a window while keeping the maximized atoms, and re-adding a set state is a no-op
 (
   while :; do
     sleep 2
@@ -124,14 +101,7 @@ CHROME_PID=$!
 ) &
 WATCH_PID=$!
 
-# Graceful shutdown: as PID 1 this script only receives the signals it
-# traps, so without a trap a pod termination leaves Chrome to be
-# SIGKILLed at the end of the grace period with the profile mid-write.
-# Stop Chrome's supervisor first so nothing relaunches it, then close
-# Chrome over CDP: a plain SIGTERM counts as a crash to Chrome (it
-# leaves its Singleton lock behind), while Browser.close runs the full
-# shutdown. Keep X and the WM up until Chrome is out, and fall back to
-# SIGTERM if the close does not take.
+# close Chrome over CDP: a plain SIGTERM leaves the Singleton lock behind and counts as a crash
 shutdown() {
   trap - TERM INT
   kill "$CHROME_PID" "$WATCH_PID" 2>/dev/null || true

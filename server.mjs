@@ -1,12 +1,3 @@
-// browser-box front server: serves the noVNC web root, proxies the VNC
-// websocket to websockify, and takes the viewer's input-mode reports.
-//
-// The viewer page reports "touch" while a phone-sized touch viewer is
-// operating (and "cursor" otherwise). In touch mode this process puts the
-// box's Chrome into CDP touch emulation, so the mouse events that arrive
-// over VNC are delivered to pages as touch input and a one-finger drag
-// touch-scrolls, like on a real phone. In cursor mode emulation is off
-// and Chrome is a plain mouse browser.
 import http from "node:http";
 import { execFile } from "node:child_process";
 import net from "node:net";
@@ -16,7 +7,7 @@ import path from "node:path";
 const WEB_ROOT = "/usr/share/novnc";
 const HTTP_HOST = process.env.NOVNC_BIND || "127.0.0.1";
 const HTTP_PORT = 6080;
-const WS_PORT = 6081;                 // websockify, localhost only
+const WS_PORT = 6081;
 const CDP_HTTP = "http://127.0.0.1:9223";
 
 const log = (...a) => console.log("[bb-server]", ...a);
@@ -40,15 +31,12 @@ const MIME = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-let mode = "cursor";                  // last mode reported by the viewer
+let mode = "cursor";
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/bb-pointer") {
-    // Xvnc sends a viewer the cursor shape only after pointer motion in
-    // that viewer's own session, so a fresh viewer asks where the
-    // pointer is and wiggles it 1px through its own input path (see
-    // primeCursor in the viewer) to make the server send the shape.
+    // Xvnc sends the cursor shape only after pointer motion in the viewer's own session
     execFile("xdotool", ["getmouselocation"],
       { env: { ...process.env, DISPLAY: process.env.DISPLAY || ":99" } },
       (err, stdout) => {
@@ -84,9 +72,7 @@ const server = http.createServer((req, res) => {
     if (err || !st.isFile()) { res.writeHead(404).end("not found"); return; }
     const type = MIME[path.extname(file)] || "application/octet-stream";
     const headers = { "Content-Type": type, "Content-Length": st.size };
-    // no-store on everything served: a stale viewer page — or a stale
-    // rfb.js module, which iOS Safari reuses without revalidating — must
-    // never survive a deploy
+    // iOS Safari reuses a cached rfb.js module without revalidating; a stale one must not survive a deploy
     headers["Cache-Control"] = "no-store";
     res.writeHead(200, headers);
     if (req.method === "HEAD") { res.end(); return; }
@@ -95,12 +81,6 @@ const server = http.createServer((req, res) => {
 });
 
 
-// With no viewer connected the desktop keeps whatever size the last
-// viewer asked for — a phone leaves it at phone size. Once the last
-// viewer has been gone for a few seconds (long enough to ride out the
-// viewer page's own reconnects), put the desktop back to the standard
-// size, so the next viewer — or a CDP session, which is not a viewer —
-// starts from a sane desktop.
 const IDLE_W = 1920, IDLE_H = 1080;
 const IDLE_GRACE_MS = 5000;
 let viewers = 0;
@@ -110,9 +90,7 @@ function restoreDesktopSize() {
   if (viewers > 0) return;
   const env = { ...process.env, DISPLAY: process.env.DISPLAY || ":99" };
   const mode = `BB${IDLE_W}x${IDLE_H}`;
-  // Xvnc takes its framebuffer size from the RandR mode of its output.
-  // The modeline timings are nominal (the display is virtual); creating
-  // the mode again on later runs just fails and is ignored.
+  // creating the mode again on later runs just fails and is ignored
   const modeline = ["173.00", "1920", "2048", "2248", "2576",
                     "1080", "1083", "1088", "1120"];
   execFile("xrandr", ["--newmode", mode, ...modeline], { env }, () => {
@@ -132,7 +110,6 @@ function viewerGone() {
   }
 }
 
-// The VNC stream itself is tunnelled byte-for-byte to websockify.
 server.on("upgrade", (req, socket, head) => {
   viewers++;
   clearTimeout(idleTimer);
@@ -192,17 +169,12 @@ class CDP {
   }
 }
 
-const targets = new Map();            // targetId -> { cdp, applied }
+const targets = new Map();
 
 async function applyEmulation(t, on) {
   if (t.applied === on) return;
-  // setTouchEmulationEnabled alone only changes what the page reports
-  // (maxTouchPoints, pointer media); it does not translate input.
-  // setEmitTouchEventsForMouse is what turns the mouse events arriving
-  // over VNC into touch events in the page — a drag then touch-scrolls.
-  // Verified against Chrome 158: the former alone leaves a drag as mouse
-  // events with no scrolling, the latter produces touchstart/move/end
-  // and scrolls.
+  // setTouchEmulationEnabled alone does not translate input; setEmitTouchEventsForMouse
+  // is what turns the mouse events arriving over VNC into touch events (verified on Chrome 158)
   if (on) {
     await t.cdp.send("Emulation.setTouchEmulationEnabled",
       { enabled: true, maxTouchPoints: 1 });
@@ -259,7 +231,7 @@ async function pollTargets() {
     const r = await fetch(CDP_HTTP + "/json/list");
     if (!r.ok) return;
     list = await r.json();
-  } catch { return; }                 // Chrome not up (yet / restarting)
+  } catch { return; }
   const pages = list.filter(t => t.type === "page" && t.webSocketDebuggerUrl);
   const seen = new Set(pages.map(t => t.id));
   for (const [id, t] of targets) {

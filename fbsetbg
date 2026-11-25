@@ -1,6 +1,4 @@
 #!/bin/sh
-# The stock fbsetbg shows an xmessage advice dialog when no wallpaper
-# setter is installed. This image has none on purpose: paint the root
-# window a solid color and succeed quietly instead.
+# stock fbsetbg pops an xmessage dialog when no wallpaper setter is installed; paint a solid color instead
 xsetroot -solid "#1f2124" >/dev/null 2>&1 || true
 exit 0
