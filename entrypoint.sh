@@ -72,10 +72,19 @@ CHROME_PID=$!
 # any iconified window is deiconified again right away. A Chrome window
 # left in normal state (e.g. after a minimize/restore race, or a session
 # restore with a saved normal placement) stops following framebuffer
-# resizes, so Chrome windows are pulled back to maximized.
+# resizes, so Chrome windows are pulled back to maximized. The state
+# atoms alone cannot be trusted for this: a move/resize request sent to
+# a maximized window makes fluxbox shrink the window while keeping the
+# maximized atoms, and re-adding a state that is already set is a no-op,
+# so check the actual geometry against the desktop and clear the state
+# before re-adding it when the two disagree.
 (
   while :; do
     sleep 2
+    geo_root=$(xdotool getdisplaygeometry 2>/dev/null || true)
+    set -- $geo_root
+    dw=${1:-}; dh=${2:-}
+    [ -n "$dw" ] && [ -n "$dh" ] || continue
     for id in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]\+'); do
       state=$(xprop -id "$id" _NET_WM_STATE 2>/dev/null || true)
       if echo "$state" | grep -q _NET_WM_STATE_HIDDEN; then
@@ -83,8 +92,16 @@ CHROME_PID=$!
         continue
       fi
       if xprop -id "$id" WM_CLASS 2>/dev/null | grep -qi google-chrome; then
-        echo "$state" | grep -q _NET_WM_STATE_MAXIMIZED_HORZ || \
-          wmctrl -i -r "$id" -b add,maximized_vert,maximized_horz 2>/dev/null || true
+        geo=$(xdotool getwindowgeometry --shell "$id" 2>/dev/null || true)
+        WIDTH=0; HEIGHT=0
+        if [ -n "$geo" ]; then eval "$geo"; fi
+        if echo "$state" | grep -q _NET_WM_STATE_MAXIMIZED_HORZ \
+           && echo "$state" | grep -q _NET_WM_STATE_MAXIMIZED_VERT \
+           && [ "${WIDTH:-0}" -ge $((dw - 2)) ] && [ "${HEIGHT:-0}" -ge $((dh - 2)) ]; then
+          continue
+        fi
+        wmctrl -i -r "$id" -b remove,maximized_vert,maximized_horz 2>/dev/null || true
+        wmctrl -i -r "$id" -b add,maximized_vert,maximized_horz 2>/dev/null || true
       fi
     done
   done
