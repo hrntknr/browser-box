@@ -785,7 +785,12 @@ for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
 // a way back.
 
 const PC_SIZE = { w: 1920, h: 1080 };
+// the pin is a property of this viewer device, so it survives a page
+// reload: iOS discards and reloads heavy pages in the background, and
+// losing the pin on reload handed the sizing straight back to the phone
 let forcePc = false;
+try { forcePc = localStorage.getItem("bb-force-pc") === "1"; } catch {}
+if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;
 
 // ----- keep the remote size honest. A SetDesktopSize request can be
 // swallowed by noVNC's one-pending-request gate when its acknowledgement
@@ -863,6 +868,7 @@ async function primeCursor() {
 
 function setForcePc(on) {
   forcePc = on;
+  try { localStorage.setItem("bb-force-pc", on ? "1" : "0"); } catch {}
   phoneReset();
   padReset();
   if (rfb) {
@@ -881,19 +887,26 @@ function setForcePc(on) {
   render();
 }
 
-let pcTapAt = 0;
+// one tap reaches us as a pointerup and then a click, and the click can
+// trail the pointerup by a second or more when the main thread is busy
+// decoding frames — a short dedupe window then lets the same tap toggle
+// twice and cancel itself, which reads as a dead button. Guard both
+// paths with one shared lockout instead of timing the pair.
+let pcToggleAt = 0;
+function toggleForcePc() {
+  const now = Date.now();
+  if (now - pcToggleAt < 1500) return;
+  pcToggleAt = now;
+  setForcePc(!forcePc);
+}
 pcButton.addEventListener("pointerup", ev => {
   if (ev.pointerType === "mouse") return;   // mouse activates via click
   const r = pcButton.getBoundingClientRect();   // a touch keeps capture on
   if (ev.clientX < r.left || ev.clientX > r.right  // its start element, so
       || ev.clientY < r.top || ev.clientY > r.bottom) return;  // check the lift point
-  pcTapAt = Date.now();
-  setForcePc(!forcePc);
+  toggleForcePc();
 });
-pcButton.addEventListener("click", () => {
-  if (Date.now() - pcTapAt < 700) return;   // this tap already toggled
-  setForcePc(!forcePc);
-});
+pcButton.addEventListener("click", toggleForcePc);
 
 // ----- on-screen keyboard (noVNC Keyboard already handles virtual keys) -----
 

@@ -95,8 +95,51 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// ------------------------------------------------------- idle restore ---
+
+// With no viewer connected the desktop keeps whatever size the last
+// viewer asked for — a phone leaves it at phone size. Once the last
+// viewer has been gone for a few seconds (long enough to ride out the
+// viewer page's own reconnects), put the desktop back to the standard
+// size, so the next viewer — or a CDP session, which is not a viewer —
+// starts from a sane desktop.
+const IDLE_W = 1920, IDLE_H = 1280;
+const IDLE_GRACE_MS = 5000;
+let viewers = 0;
+let idleTimer = 0;
+
+function restoreDesktopSize() {
+  if (viewers > 0) return;
+  const env = { ...process.env, DISPLAY: process.env.DISPLAY || ":99" };
+  const mode = `BB${IDLE_W}x${IDLE_H}`;
+  // Xvnc takes its framebuffer size from the RandR mode of its output.
+  // The modeline timings are nominal (the display is virtual); creating
+  // the mode again on later runs just fails and is ignored.
+  const modeline = ["206.75", "1920", "2056", "2264", "2608",
+                    "1280", "1283", "1288", "1340"];
+  execFile("xrandr", ["--newmode", mode, ...modeline], { env }, () => {
+    execFile("xrandr", ["--addmode", "VNC-0", mode], { env }, () => {
+      execFile("xrandr", ["--output", "VNC-0", "--mode", mode], { env },
+        err => log(err ? "idle restore failed: " + err.message
+                       : `idle restore -> ${IDLE_W}x${IDLE_H}`));
+    });
+  });
+}
+
+function viewerGone() {
+  if (viewers > 0) viewers--;
+  if (viewers === 0) {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(restoreDesktopSize, IDLE_GRACE_MS);
+  }
+}
+
 // The VNC stream itself is tunnelled byte-for-byte to websockify.
 server.on("upgrade", (req, socket, head) => {
+  viewers++;
+  clearTimeout(idleTimer);
+  let gone = false;
+  const down = () => { if (!gone) { gone = true; viewerGone(); } };
   const up = net.connect(WS_PORT, "127.0.0.1", () => {
     const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`];
     for (let i = 0; i < req.rawHeaders.length; i += 2)
@@ -106,8 +149,10 @@ server.on("upgrade", (req, socket, head) => {
     up.pipe(socket);
     socket.pipe(up);
   });
-  up.on("error", () => socket.destroy());
-  socket.on("error", () => up.destroy());
+  up.on("error", () => { socket.destroy(); down(); });
+  socket.on("error", () => { up.destroy(); down(); });
+  up.on("close", down);
+  socket.on("close", down);
 });
 
 server.listen(HTTP_PORT, HTTP_HOST, () =>
