@@ -71,6 +71,21 @@
   html.touch-ui button { min-height: 40px; min-width: 38px; padding: 6px 8px; font-size: 13px; }
   html.touch-ui #handover { padding: 6px 10px; }
   button svg { display: block; margin: 0 auto; }
+  #bar.folded { display: none; }
+  html:not(.touch-ui) #bar-fold svg { transform: rotate(180deg); }
+  #bar-handle {
+    position: fixed; z-index: 1; right: 10px; top: 10px; display: none;
+    align-items: center; gap: 7px; padding: 8px 10px;
+    background: rgba(22, 27, 34, .92); border: 1px solid #30363d;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .4); backdrop-filter: blur(8px);
+  }
+  #bar-handle.shown { display: flex; }
+  html:not(.touch-ui) #bar-handle svg { transform: rotate(180deg); }
+  html.touch-ui #bar-handle { top: auto; bottom: max(10px, env(safe-area-inset-bottom)); }
+  #handle-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #8b949e; }
+  #bar-handle[data-state="readonly"] #handle-dot { background: #3fb950; }
+  #bar-handle[data-state="manual"] #handle-dot { background: #d29922; }
+  #bar-handle[data-state="offline"] #handle-dot { background: #f85149; }
   #soft-keyboard[data-on="true"] { background: #1f6feb; color: #fff; }
   #pip[data-on="true"] { background: #1f6feb; color: #fff; }
   #pc-size[data-on="true"] { background: #1f6feb; color: #fff; }
@@ -97,7 +112,9 @@
   <button id="pip" title="最前面の小窓で表示 (Picture-in-Picture)" aria-label="最前面の小窓で表示" hidden>PiP</button>
   <button id="soft-keyboard" title="キーボード" aria-label="キーボード" hidden>⌨</button>
   <button id="handover" data-mode="takeover" disabled>操作を引き継ぐ</button>
+  <button id="bar-fold" title="バーを畳む" aria-label="バーを畳む"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6l5 5 5-5"/></svg></button>
 </div>
+<button id="bar-handle" title="バーを表示" aria-label="バーを表示"><span id="handle-dot"></span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 10l5-5 5 5"/></svg></button>
 <script type="module">
 import RFB from "/core/rfb.js";
 import Keyboard from "/core/input/keyboard.js";
@@ -111,6 +128,8 @@ const pipButton = document.getElementById("pip");
 const kbdButton = document.getElementById("soft-keyboard");
 const kbdInput = document.getElementById("kbd-input");
 const pcButton = document.getElementById("pc-size");
+const foldButton = document.getElementById("bar-fold");
+const barHandle = document.getElementById("bar-handle");
 const MAX_ZOOM = 5;
 
 // ----- which input kind drives: the pointer type of the input the user
@@ -168,6 +187,7 @@ function render() {
   label.textContent = !online ? "切断 — 再接続中…"
     : manual ? "手動操作中 — 入力が有効"
     : "表示のみ — agent が操作中";
+  barHandle.dataset.state = bar.dataset.state;
   handover.disabled = !online;
   pipButton.disabled = !online && !pipActive();   // keep the exit path open in PiP
   handover.dataset.mode = manual ? "return" : "takeover";
@@ -226,31 +246,27 @@ document.getElementById("zoom-fit").addEventListener("click", () => {
 });
 
 // ----- default view: the remote resolution follows this window
-// (resizeSession; the stock view-only block is patched out in the image).
-// BOOST is a slight enlargement on top of the fit scale, re-applied
-// whenever the framebuffer or the window changes size.
+// (resizeSession; the stock view-only block is patched out in the image)
+// and the whole desktop is shown at a plain fit — zooming in happens
+// only when the user pinches or uses the zoom buttons.
 // The framebuffer width is floored at MIN_FB_WIDTH (the rfb.js patch in
 // the image reads BB_MIN_FB_WIDTH) because the remote Chrome window
 // cannot go narrower; below the floor the view fits the whole desktop
-// scaled down instead of boosting past its edges -----
+// scaled down -----
 
-const BOOST = 1.08;
 const MIN_FB_WIDTH = 508;
 window.BB_MIN_FB_WIDTH = MIN_FB_WIDTH;
-let zoomMode = "boost";
-let boostTimer = 0;
+let zoomMode = "fit";
+let fitTimer = 0;
 
-function applyBoost() {
-  if (!canvas || !rfb || zoomMode !== "boost") return;
-  const cont = canvas.parentElement;
-  const r = cont.getBoundingClientRect();
-  const f = cont.clientWidth < MIN_FB_WIDTH ? 1 : BOOST;
-  zoomTo(fitScale() * f, r.left + r.width / 2, r.top + r.height / 2);
-}
-
-function applyBoostLater(ms) {
-  clearTimeout(boostTimer);
-  boostTimer = setTimeout(applyBoost, ms);
+/* scaleViewport already fits the desktop; re-assert it after a
+   framebuffer change so the fit follows the new size. A manual zoom is
+   left alone. */
+function applyFitLater(ms) {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() => {
+    if (rfb && zoomMode === "fit") rfb.scaleViewport = true;
+  }, ms);
 }
 
 let sizeDebounce = 0;
@@ -258,8 +274,7 @@ addEventListener("resize", () => {
   updatePhoneMode();
   clearTimeout(sizeDebounce);
   sizeDebounce = setTimeout(ensureRemoteSize, 400);
-  if (zoomMode === "boost") applyBoostLater(1200);
-  else if (zoomMode === "fit" && rfb) rfb.scaleViewport = true;
+  if (zoomMode === "fit" && rfb) rfb.scaleViewport = true;
 });
 
 // ----- Picture-in-Picture: mirror the canvas into an always-on-top mini
@@ -359,13 +374,14 @@ function hookCanvas() {
   for (const type of ["gesturestart", "gesturemove", "gestureend"]) {
     canvas.addEventListener(type, onGesture, true);
   }
-  new MutationObserver(() => applyBoostLater(150))
+  new MutationObserver(() => applyFitLater(150))
     .observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
 }
 
 // ----- touchpad for coarse pointers: manual mode drives a laptop-style
 // relative cursor (and the zoomed view pans to keep it visible); before
-// handover there is no cursor — one finger just pans the view, iOS-style
+// handover one finger just pans the view, iOS-style — the remote cursor
+// itself stays visible in both states
 
 const TAP_MS = 400;
 const TAP_SLOP = 10;
@@ -421,17 +437,16 @@ function padReset() {
 function directTouch() { return phoneMode && !forcePc; }
 
 function syncPad() {
+  // the remote cursor stays visible whether or not we are operating:
+  // noVNC's touch fallback cursor starts hidden and only mouse input
+  // would ever show it, so assert visibility on every sync
+  if (rfb && rfb._cursor) rfb._cursor._canvas.style.visibility = "";
   if (!inputTouch || !online) { padReset(); padX = null; return; }
   if (directTouch()) {
     // direct touch drives the remote pointer itself; no trackpad cursor
     padReset(); padX = null;
-    if (rfb && rfb._cursor) {
-      rfb._cursor._canvas.style.visibility = manual ? "" : "hidden";
-    }
     return;
   }
-  // the trackpad cursor exists only while operating — reading is just pan & zoom
-  rfb._cursor._canvas.style.visibility = manual ? "" : "hidden";
   if (!manual) { padReset(); padX = null; return; }
   if (padX === null && canvas) {
     // place the cursor where the user is looking, not always at the fb center
@@ -799,6 +814,34 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) ensureRemoteSizeSoon();
 });
 
+/* Xvnc sends the cursor shape only after pointer motion in this
+   session, so a viewer that just watches would see no cursor. Ask the
+   server where the pointer is and wiggle it 1px and back through our
+   own input path; viewOnly is lifted just for the wiggle. */
+async function primeCursor() {
+  if (!rfb || manual) return;
+  try {
+    const res = await fetch("/bb-pointer");
+    if (!res.ok) return;
+    const { x, y } = await res.json();
+    if (!canvas) return;
+    const dx = x + 1 < canvas.width ? 1 : -1;
+    const move = (px, py) => {
+      const r = canvas.getBoundingClientRect();
+      rfb._fakeMouseMove({ detail: {
+        clientX: r.left + px * scale(), clientY: r.top + py * scale(),
+      } }, px * scale(), py * scale());
+    };
+    rfb.viewOnly = false;
+    move(x + dx, y);
+    setTimeout(() => {
+      if (!rfb) return;
+      move(x, y);
+      rfb.viewOnly = !manual;
+    }, 90);
+  } catch {}
+}
+
 function setForcePc(on) {
   forcePc = on;
   phoneReset();
@@ -810,8 +853,8 @@ function setForcePc(on) {
       rfb.scaleViewport = true;
     } else {
       delete window.BB_FORCE_SIZE;
-      zoomMode = "boost";
-      applyBoostLater(300);
+      zoomMode = "fit";
+      rfb.scaleViewport = true;
     }
     ensureRemoteSize();
     ensureRemoteSizeSoon();
@@ -874,6 +917,17 @@ kbdInput.addEventListener("paste", ev => {
 
 // ----- handover, idle fade, connection -----
 
+// ----- fold the bar away when it covers what the user wants to tap;
+// a small handle (with the state dot) stays at the edge to bring it back
+let barFolded = false;
+function setBarFolded(f) {
+  barFolded = f;
+  bar.classList.toggle("folded", f);
+  barHandle.classList.toggle("shown", f);
+}
+foldButton.addEventListener("click", () => setBarFolded(true));
+barHandle.addEventListener("click", () => setBarFolded(false));
+
 handover.addEventListener("click", () => {
   manual = !manual;
   rfb.viewOnly = !manual;
@@ -900,10 +954,11 @@ function connect() {
   rfb.resizeSession = true;
   rfb.addEventListener("connect", () => {
     online = true;
+    primeCursor();
     if (forcePc) window.BB_FORCE_SIZE = PC_SIZE;   // re-assert after a reconnect
     hookCanvas();
     ensureRemoteSizeSoon();
-    applyBoostLater(900);
+    applyFitLater(900);
     if (canvas.captureStream) pipAttach();   // warm stream for the PiP window
     else pipButton.hidden = true;
     render();

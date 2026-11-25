@@ -8,6 +8,7 @@
 // touch-scrolls, like on a real phone. In cursor mode emulation is off
 // and Chrome is a plain mouse browser.
 import http from "node:http";
+import { execFile } from "node:child_process";
 import net from "node:net";
 import fs from "node:fs";
 import path from "node:path";
@@ -44,6 +45,21 @@ let mode = "cursor";                  // last mode reported by the viewer
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://x");
+  if (url.pathname === "/bb-pointer") {
+    // Xvnc sends a viewer the cursor shape only after pointer motion in
+    // that viewer's own session, so a fresh viewer asks where the
+    // pointer is and wiggles it 1px through its own input path (see
+    // primeCursor in the viewer) to make the server send the shape.
+    execFile("xdotool", ["getmouselocation"],
+      { env: { ...process.env, DISPLAY: process.env.DISPLAY || ":99" } },
+      (err, stdout) => {
+        const m = err ? null : /x:(\d+) y:(\d+)/.exec(stdout);
+        if (!m) { res.writeHead(502).end(); return; }
+        res.writeHead(200, { "Content-Type": "application/json" })
+          .end(JSON.stringify({ x: +m[1], y: +m[2] }));
+      });
+    return;
+  }
   if (url.pathname === "/bb-mode") {
     if (req.method === "POST") {
       let body = "";
