@@ -205,7 +205,6 @@ function zoomTo(z, ax, ay) {
     cont.scrollLeft += r1.left - (ax - fx * z);
     cont.scrollTop += r1.top - (ay - fy * z);
   }
-  syncCanvasAnchor();
   if (padX !== null) padMoveTo(padX, padY);
 }
 
@@ -221,7 +220,6 @@ document.getElementById("zoom-out").addEventListener("click", () => zoomStep(1 /
 document.getElementById("zoom-fit").addEventListener("click", () => {
   zoomMode = "fit";
   if (rfb) rfb.scaleViewport = true;
-  syncCanvasAnchor();
 });
 
 const MIN_FB_WIDTH = 508;
@@ -233,15 +231,7 @@ function applyFitLater(ms) {
   clearTimeout(fitTimer);
   fitTimer = setTimeout(() => {
     if (rfb && zoomMode === "fit") rfb.scaleViewport = true;
-    syncCanvasAnchor();
   }, ms);
-}
-
-/* noVNC centres the canvas (margin: auto); while fitting, pin it to the top so the tab strip is not pushed down the phone screen */
-function syncCanvasAnchor() {
-  if (!canvas || !rfb) return;
-  const want = rfb.scaleViewport ? "0px" : "auto";
-  if (canvas.style.marginTop !== want) canvas.style.marginTop = want;
 }
 
 /* #screen must match the visible viewport: the layout viewport can extend under the browser chrome */
@@ -739,7 +729,7 @@ function ensureRemoteSizeSoon() {
 }
 
 // iOS freezes page timers in background tabs, and a lost resize reply wedges the size until something asks again
-setInterval(() => { ensureRemoteSize(); syncCanvasAnchor(); }, 800);
+setInterval(ensureRemoteSize, 800);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) { syncScreenHeight(); ensureRemoteSizeSoon(); }
 });
