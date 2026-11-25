@@ -145,7 +145,7 @@ document.addEventListener("touchstart", () => setInputTouch(true),
 
 let emuWant = null;
 function reportMode() {
-  const want = phoneMode && manual && online ? "touch" : "cursor";
+  const want = phoneMode && !forcePc && manual && online ? "touch" : "cursor";
   if (want === emuWant) return;
   emuWant = want;
   fetch("/bb-mode", { method: "POST", body: want, keepalive: true })
@@ -416,9 +416,13 @@ function padReset() {
   t1 = t2 = twoMode = null;
 }
 
+/* direct touch is the phone mode only while the PC size is not forced;
+   forcing switches the same finger to the trackpad below */
+function directTouch() { return phoneMode && !forcePc; }
+
 function syncPad() {
   if (!inputTouch || !online) { padReset(); padX = null; return; }
-  if (phoneMode) {
+  if (directTouch()) {
     // direct touch drives the remote pointer itself; no trackpad cursor
     padReset(); padX = null;
     if (rfb && rfb._cursor) {
@@ -523,7 +527,7 @@ function padEnd(id, x, y) {
 }
 
 function onPadTouch(ev) {
-  if (!inputTouch || !online || phoneMode) return;
+  if (!inputTouch || !online || directTouch()) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
   poke();
@@ -723,7 +727,7 @@ function phoneEnd(id, x, y) {
 }
 
 function onPhoneTouch(ev) {
-  if (!phoneMode || !online) return;
+  if (!directTouch() || !online) return;
   ev.preventDefault();
   ev.stopImmediatePropagation();
   poke();
@@ -739,11 +743,14 @@ for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
 
 // ----- force PC size: pin the framebuffer at a desktop resolution (the
 // rfb.js patch in the image honours BB_FORCE_SIZE over the viewer size)
-// and fit it into the phone screen; tapping again hands sizing back to
-// the viewer. The button stays in the bar whenever phone mode is active
-// — and while forced — so there is always a way back.
+// and fit it into the phone screen; while pinned, the finger drives the
+// trackpad (a relative cursor) instead of direct touch, and the box
+// Chrome leaves touch emulation (reportMode). Tapping again hands sizing
+// and direct touch back to the viewer. The button stays in the bar
+// whenever phone mode is active — and while forced — so there is always
+// a way back.
 
-const PC_SIZE = { w: 1440, h: 900 };
+const PC_SIZE = { w: 1920, h: 1080 };
 let forcePc = false;
 
 // ----- keep the remote size honest. A SetDesktopSize request can be
@@ -783,8 +790,19 @@ function ensureRemoteSizeSoon() {
   }, 500);
 }
 
+// A lost resize reply wedges the size until something asks again, and iOS
+// freezes page timers while the tab is in the background — so keep asking
+// for as long as the page lives (ensureRemoteSize is a no-op once the
+// sizes agree), and ask again when the page comes back to the front.
+setInterval(ensureRemoteSize, 800);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) ensureRemoteSizeSoon();
+});
+
 function setForcePc(on) {
   forcePc = on;
+  phoneReset();
+  padReset();
   if (rfb) {
     if (on) {
       window.BB_FORCE_SIZE = PC_SIZE;
@@ -801,7 +819,19 @@ function setForcePc(on) {
   render();
 }
 
-pcButton.addEventListener("click", () => setForcePc(!forcePc));
+let pcTapAt = 0;
+pcButton.addEventListener("pointerup", ev => {
+  if (ev.pointerType === "mouse") return;   // mouse activates via click
+  const r = pcButton.getBoundingClientRect();   // a touch keeps capture on
+  if (ev.clientX < r.left || ev.clientX > r.right  // its start element, so
+      || ev.clientY < r.top || ev.clientY > r.bottom) return;  // check the lift point
+  pcTapAt = Date.now();
+  setForcePc(!forcePc);
+});
+pcButton.addEventListener("click", () => {
+  if (Date.now() - pcTapAt < 700) return;   // this tap already toggled
+  setForcePc(!forcePc);
+});
 
 // ----- on-screen keyboard (noVNC Keyboard already handles virtual keys) -----
 

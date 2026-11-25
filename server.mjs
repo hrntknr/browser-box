@@ -69,7 +69,9 @@ const server = http.createServer((req, res) => {
     if (err || !st.isFile()) { res.writeHead(404).end("not found"); return; }
     const type = MIME[path.extname(file)] || "application/octet-stream";
     const headers = { "Content-Type": type, "Content-Length": st.size };
-    if (type.startsWith("text/") || type === "application/json")
+    if (rel.endsWith(".html"))
+      headers["Cache-Control"] = "no-store";   // a stale viewer page must never survive a deploy
+    else if (type.startsWith("text/") || type === "application/json")
       headers["Cache-Control"] = "no-cache";
     res.writeHead(200, headers);
     if (req.method === "HEAD") { res.end(); return; }
