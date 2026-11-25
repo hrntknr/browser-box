@@ -235,6 +235,7 @@ function zoomTo(z, ax, ay) {
     cont.scrollLeft += r1.left - (ax - fx * z);
     cont.scrollTop += r1.top - (ay - fy * z);
   }
+  syncCanvasAnchor();
   if (padX !== null) padMoveTo(padX, padY);   // keep the cursor on its remote spot
 }
 
@@ -250,6 +251,7 @@ document.getElementById("zoom-out").addEventListener("click", () => zoomStep(1 /
 document.getElementById("zoom-fit").addEventListener("click", () => {
   zoomMode = "fit";
   if (rfb) rfb.scaleViewport = true;
+  syncCanvasAnchor();
 });
 
 // ----- default view: the remote resolution follows this window
@@ -273,7 +275,20 @@ function applyFitLater(ms) {
   clearTimeout(fitTimer);
   fitTimer = setTimeout(() => {
     if (rfb && zoomMode === "fit") rfb.scaleViewport = true;
+    syncCanvasAnchor();
   }, ms);
+}
+
+/* noVNC centres the canvas in its flex screen (margin: auto on both
+   axes). A fit that is limited by width — every phone portrait view —
+   then leaves half the leftover height above the desktop, and the
+   window's tab strip starts that far down the phone screen. While the
+   viewport is scaled to fit, pin the canvas to the top instead; a
+   manual zoom keeps the centred anchor. */
+function syncCanvasAnchor() {
+  if (!canvas || !rfb) return;
+  const want = rfb.scaleViewport ? "0px" : "auto";
+  if (canvas.style.marginTop !== want) canvas.style.marginTop = want;
 }
 
 /* keep #screen exactly as tall as the visible viewport: inset:0 alone
@@ -830,7 +845,7 @@ function ensureRemoteSizeSoon() {
 // freezes page timers while the tab is in the background — so keep asking
 // for as long as the page lives (ensureRemoteSize is a no-op once the
 // sizes agree), and ask again when the page comes back to the front.
-setInterval(ensureRemoteSize, 800);
+setInterval(() => { ensureRemoteSize(); syncCanvasAnchor(); }, 800);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) { syncScreenHeight(); ensureRemoteSizeSoon(); }
 });
