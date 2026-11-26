@@ -33,6 +33,8 @@ COPY fbsetbg /usr/bin/fbsetbg
 RUN chmod 755 /usr/bin/fbsetbg
 COPY ui/index.html /usr/share/novnc/index.html
 COPY entrypoint.sh /app/entrypoint.sh
+COPY package.json package-lock.json /app/
+RUN cd /app && npm ci --omit=dev --ignore-scripts
 COPY server.mjs /app/server.mjs
 EXPOSE 9222 6080
 

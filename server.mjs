@@ -1,8 +1,8 @@
-import http from "node:http";
 import { execFile } from "node:child_process";
 import net from "node:net";
-import fs from "node:fs";
-import path from "node:path";
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 
 const WEB_ROOT = "/usr/share/novnc";
 const HTTP_HOST = process.env.NOVNC_BIND || "127.0.0.1";
@@ -12,73 +12,34 @@ const CDP_HTTP = "http://127.0.0.1:9223";
 
 const log = (...a) => console.log("[bb-server]", ...a);
 
-
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".md": "text/markdown; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-};
-
 let mode = "cursor";
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, "http://x");
-  if (url.pathname === "/bb-pointer") {
-    // Xvnc sends the cursor shape only after pointer motion in the viewer's own session
-    execFile("xdotool", ["getmouselocation"],
-      { env: { ...process.env, DISPLAY: process.env.DISPLAY || ":99" } },
-      (err, stdout) => {
-        const m = err ? null : /x:(\d+) y:(\d+)/.exec(stdout);
-        if (!m) { res.writeHead(502).end(); return; }
-        res.writeHead(200, { "Content-Type": "application/json" })
-          .end(JSON.stringify({ x: +m[1], y: +m[2] }));
-      });
-    return;
-  }
-  if (url.pathname === "/bb-mode") {
-    if (req.method === "POST") {
-      let body = "";
-      req.on("data", c => { body += c; });
-      req.on("end", () => {
-        setMode(body.trim() === "touch" ? "touch" : "cursor");
-        res.writeHead(204).end();
-      });
-      return;
-    }
-    res.writeHead(200, { "Content-Type": "text/plain" }).end(mode + "\n");
-    return;
-  }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.writeHead(405).end();
-    return;
-  }
-  let rel = decodeURIComponent(url.pathname);
-  if (rel === "/") rel = "/index.html";
-  const file = path.join(WEB_ROOT, rel);
-  if (!file.startsWith(WEB_ROOT + path.sep)) { res.writeHead(403).end(); return; }
-  fs.stat(file, (err, st) => {
-    if (err || !st.isFile()) { res.writeHead(404).end("not found"); return; }
-    const type = MIME[path.extname(file)] || "application/octet-stream";
-    const headers = { "Content-Type": type, "Content-Length": st.size };
-    // iOS Safari reuses a cached rfb.js module without revalidating; a stale one must not survive a deploy
-    headers["Cache-Control"] = "no-store";
-    res.writeHead(200, headers);
-    if (req.method === "HEAD") { res.end(); return; }
-    fs.createReadStream(file).pipe(res);
-  });
+const app = new Hono();
+
+app.get("/bb-pointer", (c) => new Promise((resolve) => {
+  // Xvnc sends the cursor shape only after pointer motion in the viewer's own session
+  execFile("xdotool", ["getmouselocation"],
+    { env: { ...process.env, DISPLAY: process.env.DISPLAY || ":99" } },
+    (err, stdout) => {
+      const m = err ? null : /x:(\d+) y:(\d+)/.exec(stdout);
+      resolve(m ? c.json({ x: +m[1], y: +m[2] }) : c.body(null, 502));
+    });
+}));
+
+app.get("/bb-mode", (c) => c.text(mode + "\n"));
+
+app.post("/bb-mode", async (c) => {
+  setMode((await c.req.text()).trim() === "touch" ? "touch" : "cursor");
+  return c.body(null, 204);
 });
+
+// iOS Safari reuses a cached rfb.js module without revalidating; a stale one must not survive a deploy
+const noStore = (_path, c) => c.header("Cache-Control", "no-store");
+app.use(serveStatic({ root: WEB_ROOT, onFound: noStore }));
+
+const server = serve(
+  { fetch: app.fetch, hostname: HTTP_HOST, port: HTTP_PORT },
+  () => log(`http on ${HTTP_HOST}:${HTTP_PORT}, ws proxy -> 127.0.0.1:${WS_PORT}`));
 
 
 const IDLE_W = 1920, IDLE_H = 1080;
@@ -129,9 +90,6 @@ server.on("upgrade", (req, socket, head) => {
   up.on("close", down);
   socket.on("close", down);
 });
-
-server.listen(HTTP_PORT, HTTP_HOST, () =>
-  log(`http on ${HTTP_HOST}:${HTTP_PORT}, ws proxy -> 127.0.0.1:${WS_PORT}`));
 
 
 let seq = 0;
