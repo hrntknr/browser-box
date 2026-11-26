@@ -4,16 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - Dockerfile
-      - entrypoint.sh
-      - server.mjs
+      - docker/**
       - compose.yml
-      - ui/**
-      - fluxbox/**
-      - fbsetbg
-      - package.json
-      - package-lock.json
-      - .dockerignore
       - .github/workflows/image.yml
   workflow_dispatch:
 
@@ -33,7 +25,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: docker
           push: true
           tags: |
             ghcr.io/hrntknr/browser-box:latest

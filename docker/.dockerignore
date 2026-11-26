@@ -1,6 +1,3 @@
 node_modules/
 artifacts/
 data/
-.opencode/
-.git/
-renovate.json

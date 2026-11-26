@@ -54,11 +54,11 @@ mkdir -p /run/dbus
 rm -f /run/dbus/pid /run/dbus/system_bus_socket   # stale after docker restart
 dbus-daemon --system --fork
 eval "$(dbus-launch --sh-syntax)"
-node -e 'const n=require("net");n.createServer(c=>{const u=n.connect(9223,"127.0.0.1");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).listen(9222,"0.0.0.0")' &
+node /app/cdp-forward.mjs &
 FWD_PID=$!
 
 # merge the pref at every start: the profile is a volume, so the seeded Preferences in the image is not what persists
-node -e 'const fs=require("fs");const p="/data/profile/Default/Preferences";let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){}if(!j.browser)j.browser={};j.browser.custom_chrome_frame=false;fs.mkdirSync("/data/profile/Default",{recursive:true});fs.writeFileSync(p,JSON.stringify(j))' || true
+node /app/merge-preferences.mjs || true
 
 # Singleton cleanup is safe here: this loop only runs while Chrome is down
 (
@@ -105,12 +105,7 @@ WATCH_PID=$!
 shutdown() {
   trap - TERM INT
   kill "$CHROME_PID" "$WATCH_PID" 2>/dev/null || true
-  node --experimental-websocket --input-type=module -e '
-    const ver = await (await fetch("http://127.0.0.1:9223/json/version")).json();
-    const ws = new WebSocket(ver.webSocketDebuggerUrl);
-    await new Promise((res, rej) => { ws.addEventListener("open", res, { once: true }); ws.addEventListener("error", rej, { once: true }); });
-    ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
-  ' 2>/dev/null || true
+  node --experimental-websocket /app/close-chrome.mjs 2>/dev/null || true
   i=0
   while pgrep -x chrome >/dev/null 2>&1 && [ "$i" -lt 10 ]; do
     sleep 1
