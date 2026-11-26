@@ -5,6 +5,6 @@
   "dependencies": {
     "@hono/node-server": "^2.1.11",
     "hono": "^4.13.22",
-    "playwright": "1.64.1"
+    "playwright": "1.65.1"
   }
 }
