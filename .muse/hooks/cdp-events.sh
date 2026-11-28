@@ -76,6 +76,19 @@ if [ -z "$next" ]; then
   silent "event log unreachable" '{}'
 fi
 
+# The event log is in-memory on the server: after a server restart seq
+# starts over below our cursor. Reset and re-read from the beginning.
+if [ "$next" -lt "$cursor" ]; then
+  log "cdp-events: event log reset detected" "{\"cursor\": $cursor, \"next\": $next}"
+  cursor=0
+  resp=$(fetch_events 0)
+  next=$(printf '%s' "$resp" | jq -r '.next // empty' 2>/dev/null || true)
+  if [ -z "$next" ]; then
+    log "cdp-events: event log unreachable" '{}'
+    silent "event log unreachable" '{}'
+  fi
+fi
+
 events=$(printf '%s' "$resp" | jq -c --arg ids "$SUBSCRIPTION_IDS" '
   .events
   | if $ids == "" then .

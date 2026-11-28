@@ -180,6 +180,10 @@ export function initEventWatcher({ state, saveState, control, log, cdpHttp }) {
     if (m.sessionId) {
       const s = sessions.get(m.sessionId);
       if (!s) return;
+      // subframe navigations arrive on the page session too; a
+      // frameNavigated subscription means the top-level navigation
+      if (m.method === "Page.frameNavigated" && p.frame && p.frame.parentId)
+        return;
       if (m.method === "Page.frameNavigated" && p.frame && p.frame.url)
         s.url = p.frame.url;
       const url = (p.frame && p.frame.url) || s.url || "";
