@@ -72,7 +72,8 @@ Userscript semantics follow the usual userscript rules:
 ### Autoclose (6082)
 
 - `GET /bb/autoclose` — `{"idleMinutes", "paused", "pausedUntil",
-  "tabs": [{"id", "url", "title", "foreground", "lastForegroundAt"}]}`.
+  "tabs": [{"id", "url", "title", "foreground", "lastForegroundAt",
+  "neverClose"}]}`.
 - `POST /bb/autoclose` — JSON body; the fields combine:
   - `idleMinutes` (number, 0 or more): idle threshold in minutes.
     0 disables closing.
@@ -80,6 +81,15 @@ Userscript semantics follow the usual userscript rules:
   - `paused: true` pauses indefinitely, `paused: false` resumes.
   - `resume: true` resumes.
   - The response is the same view as the GET.
+- Per-tab exclusion — an excluded tab is never closed, regardless of
+  the global rule (which otherwise always stays in effect):
+  - `GET /bb/autoclose/tabs` — `{"tabs": [{"id", "neverClose", "url",
+    "title"}]}`.
+  - `POST /bb/autoclose/tabs/:id` — exclude the tab (`{"neverClose":
+    false}` clears it again). Tab ids come from the GET view above.
+  - `DELETE /bb/autoclose/tabs/:id` — clear the exclusion.
+  - Exclusions persist in the state file; an exclusion for a tab that
+    no longer exists is dropped automatically.
 
 Every 15 seconds the server checks which tab is in front
 (`document.visibilityState` / `document.hasFocus()`). A tab that has

@@ -139,7 +139,7 @@ const STATE_FILE = process.env.BB_STATE_FILE || "/data/profile/bb-state.json";
 
 const state = {
   scripts: [],
-  autoclose: { idleMinutes: 360, paused: false, pausedUntil: 0 },
+  autoclose: { idleMinutes: 360, paused: false, pausedUntil: 0, tabs: {} },
 };
 try {
   const saved = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
@@ -147,6 +147,8 @@ try {
   if (saved.autoclose) Object.assign(state.autoclose, saved.autoclose);
   log(`state loaded: ${state.scripts.length} userscript(s)`);
 } catch {}
+if (!state.autoclose.tabs || typeof state.autoclose.tabs !== "object")
+  state.autoclose.tabs = {};
 
 function saveState() {
   try {
@@ -275,6 +277,7 @@ function autocloseView() {
       url: t.url || "",
       title: t.title || "",
       foreground: !!t.foreground,
+      neverClose: !!state.autoclose.tabs[id],
       lastForegroundAt: t.lastForegroundAt
         ? new Date(t.lastForegroundAt).toISOString() : null,
     })),
@@ -309,6 +312,34 @@ control.post("/bb/autoclose", async (c) => {
   saveState();
   log("autoclose updated:", JSON.stringify(state.autoclose));
   return c.json(autocloseView());
+});
+
+// per-tab exclusion: an excluded tab is never closed by autoclose,
+// regardless of the global rule. The global rule itself stays in effect.
+control.get("/bb/autoclose/tabs", (c) => c.json({
+  tabs: Object.keys(state.autoclose.tabs).map((id) => {
+    const t = targets.get(id);
+    return { id, neverClose: true, url: t ? t.url || "" : "", title: t ? t.title || "" : "" };
+  }),
+}));
+
+control.post("/bb/autoclose/tabs/:id", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  if (body && body.neverClose === false) delete state.autoclose.tabs[id];
+  else state.autoclose.tabs[id] = true;
+  saveState();
+  log("autoclose tab exclusion:", id, !!state.autoclose.tabs[id]);
+  return c.json({ id, neverClose: !!state.autoclose.tabs[id] });
+});
+
+control.delete("/bb/autoclose/tabs/:id", (c) => {
+  const id = c.req.param("id");
+  if (!(id in state.autoclose.tabs)) return c.json({ error: "not found" }, 404);
+  delete state.autoclose.tabs[id];
+  saveState();
+  log("autoclose tab exclusion removed:", id);
+  return c.body(null, 204);
 });
 
 // iOS Safari reuses a cached rfb.js module without revalidating; a stale one must not survive a deploy
@@ -512,6 +543,11 @@ async function pollTargets() {
       catch (e) { log("watch failed:", e.message); targets.delete(tgt.id); }
     }
   }
+  let pruned = false;
+  for (const id of Object.keys(state.autoclose.tabs)) {
+    if (!targets.has(id)) { delete state.autoclose.tabs[id]; pruned = true; }
+  }
+  if (pruned) saveState();
 }
 
 setInterval(() => { pollTargets().catch(() => {}); }, 1500);
@@ -544,7 +580,7 @@ async function sweepAutoclose() {
   const pages = [...targets.entries()];
   if (pages.length <= 1) return;
   const stale = pages
-    .filter(([, t]) => !t.foreground
+    .filter(([id, t]) => !ac.tabs[id] && !t.foreground
       && now - (t.lastForegroundAt || now) > ac.idleMinutes * 60000)
     .sort((a, b) => (a[1].lastForegroundAt || 0) - (b[1].lastForegroundAt || 0));
   let remaining = pages.length;
