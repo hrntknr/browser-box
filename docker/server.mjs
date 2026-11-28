@@ -10,6 +10,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 const WEB_ROOT = "/usr/share/novnc";
 const HTTP_HOST = process.env.NOVNC_BIND || "127.0.0.1";
 const HTTP_PORT = 6080;
+const CONTROL_PORT = 6082;
 const WS_PORT = 6081;
 const CDP_HTTP = "http://127.0.0.1:9223";
 
@@ -138,7 +139,7 @@ const STATE_FILE = process.env.BB_STATE_FILE || "/data/profile/bb-state.json";
 
 const state = {
   scripts: [],
-  autoclose: { idleMinutes: 30, paused: false, pausedUntil: 0 },
+  autoclose: { idleMinutes: 360, paused: false, pausedUntil: 0 },
 };
 try {
   const saved = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
@@ -159,8 +160,9 @@ function saveState() {
 }
 
 const app = new Hono();
+const control = new Hono();
 
-app.get("/bb-pointer", (c) => new Promise((resolve) => {
+app.get("/bb/pointer", (c) => new Promise((resolve) => {
   // Xvnc sends the cursor shape only after pointer motion in the viewer's own session
   execFile("xdotool", ["getmouselocation"],
     { env: { ...process.env, DISPLAY: process.env.DISPLAY || ":99" } },
@@ -170,9 +172,9 @@ app.get("/bb-pointer", (c) => new Promise((resolve) => {
     });
 }));
 
-app.get("/bb-mode", (c) => c.text(mode + "\n"));
+app.get("/bb/mode", (c) => c.text(mode + "\n"));
 
-app.post("/bb-mode", async (c) => {
+app.post("/bb/mode", async (c) => {
   setMode((await c.req.text()).trim() === "touch" ? "touch" : "cursor");
   return c.body(null, 204);
 });
@@ -183,39 +185,72 @@ const scriptSummary = (s) => ({
   addedAt: s.addedAt,
 });
 
-app.get("/bb-userscripts", (c) => c.json(state.scripts.map(scriptSummary)));
+control.get("/bb/userscripts", (c) => c.json(state.scripts.map(scriptSummary)));
 
-app.get("/bb-userscripts/:id", (c) => {
+control.get("/bb/userscripts/:id", (c) => {
   const s = state.scripts.find((x) => x.id === c.req.param("id"));
   return s ? c.json({ ...scriptSummary(s), source: s.source })
            : c.json({ error: "not found" }, 404);
 });
 
-app.post("/bb-userscripts", async (c) => {
-  let source = await c.req.text();
-  try {
-    const j = JSON.parse(source);
-    if (j && typeof j.source === "string") source = j.source;
-  } catch {}
-  let rec;
-  try {
-    rec = await assembleScript(source);
-  } catch (e) {
-    return c.json({ error: e.message }, 400);
-  }
+async function addUserscript(source) {
+  const rec = await assembleScript(source);
   const existing = state.scripts.find((x) => x.id === rec.id);
   if (!existing) {
     state.scripts.push(rec);
     saveState();
     log("userscript added:", rec.name, rec.id);
   }
+  return { rec: existing || rec, created: !existing };
+}
+
+async function applyScriptsToAllTargets() {
   for (const t of targets.values()) {
     try { await applyScriptsToTarget(t); } catch {}
   }
-  return c.json(scriptSummary(existing || rec), existing ? 200 : 201);
+}
+
+control.post("/bb/userscripts", async (c) => {
+  if ((c.req.header("content-type") || "").startsWith("multipart/form-data")) {
+    const body = await c.req.parseBody({ all: true }).catch(() => null);
+    const files = [];
+    for (const v of Object.values(body || {})) {
+      for (const item of Array.isArray(v) ? v : [v]) {
+        // file parts arrive as File objects; text fields are plain strings
+        if (item && typeof item === "object" && typeof item.text === "function")
+          files.push(item);
+      }
+    }
+    if (!files.length)
+      return c.json({ error: "no file part in multipart body" }, 400);
+    const results = [];
+    for (const f of files) {
+      try {
+        const { rec, created } = await addUserscript(await f.text());
+        results.push({ file: f.name, ok: true, status: created ? 201 : 200, ...scriptSummary(rec) });
+      } catch (e) {
+        results.push({ file: f.name, ok: false, error: e.message });
+      }
+    }
+    await applyScriptsToAllTargets();
+    return c.json({ results }, results.some((r) => r.ok) ? 200 : 400);
+  }
+  let source = await c.req.text();
+  try {
+    const j = JSON.parse(source);
+    if (j && typeof j.source === "string") source = j.source;
+  } catch {}
+  let added;
+  try {
+    added = await addUserscript(source);
+  } catch (e) {
+    return c.json({ error: e.message }, 400);
+  }
+  await applyScriptsToAllTargets();
+  return c.json(scriptSummary(added.rec), added.created ? 201 : 200);
 });
 
-app.delete("/bb-userscripts/:id", async (c) => {
+control.delete("/bb/userscripts/:id", async (c) => {
   const id = c.req.param("id");
   const i = state.scripts.findIndex((x) => x.id === id);
   if (i === -1) return c.json({ error: "not found" }, 404);
@@ -246,9 +281,9 @@ function autocloseView() {
   };
 }
 
-app.get("/bb-autoclose", (c) => c.json(autocloseView()));
+control.get("/bb/autoclose", (c) => c.json(autocloseView()));
 
-app.post("/bb-autoclose", async (c) => {
+control.post("/bb/autoclose", async (c) => {
   let body;
   try {
     body = await c.req.json();
@@ -283,6 +318,10 @@ app.use(serveStatic({ root: WEB_ROOT, onFound: noStore }));
 const server = serve(
   { fetch: app.fetch, hostname: HTTP_HOST, port: HTTP_PORT },
   () => log(`http on ${HTTP_HOST}:${HTTP_PORT}, ws proxy -> 127.0.0.1:${WS_PORT}`));
+
+serve(
+  { fetch: control.fetch, hostname: HTTP_HOST, port: CONTROL_PORT },
+  () => log(`control api on ${HTTP_HOST}:${CONTROL_PORT}`));
 
 
 const IDLE_W = 1920, IDLE_H = 1080;

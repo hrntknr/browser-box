@@ -147,12 +147,12 @@ function reportMode() {
   const want = phoneMode && !forcePc && manual && online ? "touch" : "cursor";
   if (want === emuWant) return;
   emuWant = want;
-  fetch("/bb-mode", { method: "POST", body: want, keepalive: true })
+  fetch("/bb/mode", { method: "POST", body: want, keepalive: true })
     .catch(() => { emuWant = null; });
 }
 addEventListener("pagehide", () => {
   if (emuWant === "touch")
-    fetch("/bb-mode", { method: "POST", body: "cursor", keepalive: true }).catch(() => {});
+    fetch("/bb/mode", { method: "POST", body: "cursor", keepalive: true }).catch(() => {});
 });
 
 let rfb = null;
@@ -740,7 +740,7 @@ document.addEventListener("visibilitychange", () => {
 async function primeCursor() {
   if (!rfb || manual) return;
   try {
-    const res = await fetch("/bb-pointer");
+    const res = await fetch("/bb/pointer");
     if (!res.ok) return;
     const { x, y } = await res.json();
     if (!canvas) return;
