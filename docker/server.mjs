@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -13,6 +16,147 @@ const CDP_HTTP = "http://127.0.0.1:9223";
 const log = (...a) => console.log("[bb-server]", ...a);
 
 let mode = "cursor";
+
+// ---------- userscript metadata (same rules as the standalone loader) ----------
+
+const MULTI_KEYS = new Set(["match", "include", "exclude", "require", "grant"]);
+
+function parseMetadata(source) {
+  const block = source.match(/\/\/ ==UserScript==[^\S\r\n]*\r?\n([\s\S]*?)\/\/ ==\/UserScript==/);
+  if (!block) throw new Error("missing ==UserScript== metadata block");
+  const meta = { match: [], include: [], exclude: [], require: [], grant: [], noframes: false };
+  for (const line of block[1].split(/\r?\n/)) {
+    const m = line.match(/^\s*\/\/\s*@(\S+)(?:\s+(.*?))?\s*$/);
+    if (!m) continue;
+    const key = m[1];
+    const value = m[2] ?? "";
+    if (key === "noframes") meta.noframes = true;
+    else if (MULTI_KEYS.has(key)) meta[key].push(value);
+    else if (!(key in meta)) meta[key] = value;
+  }
+  return meta;
+}
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function matchPatternToRegExp(pattern) {
+  if (pattern === "<all_urls>") return /^https?:\/\/[^/]+(?:\/.*)?$/;
+  const m = pattern.match(/^(\*|http|https|file|ftp):\/\/([^/]*)(\/.*)?$/);
+  if (!m) return null;
+  const scheme = m[1] === "*" ? "https?" : m[1];
+  let host;
+  if (m[2] === "*") host = "[^/]*";
+  else if (m[2].startsWith("*.")) host = "(?:[^/]+\\.)*" + escapeRegExp(m[2].slice(2));
+  else host = escapeRegExp(m[2]);
+  const p = (m[3] ?? "/*").split("*").map(escapeRegExp).join(".*");
+  return new RegExp(`^${scheme}://${host}${p}$`);
+}
+
+function globToRegExp(glob) {
+  if (glob.length > 2 && glob.startsWith("/") && glob.endsWith("/")) {
+    try {
+      return new RegExp(glob.slice(1, -1));
+    } catch {
+      return null;
+    }
+  }
+  return new RegExp("^" + glob.split("*").map(escapeRegExp).join(".*") + "$");
+}
+
+function buildInjectedSource(meta, code) {
+  const sources = (list) => list.map((r) => r && r.source).filter(Boolean);
+  const cfg = JSON.stringify({
+    match: sources(meta.match.map(matchPatternToRegExp)),
+    include: sources(meta.include.map(globToRegExp)),
+    exclude: sources(meta.exclude.map(globToRegExp)),
+    noframes: meta.noframes,
+    runAt: meta["run-at"] || "document-idle",
+  });
+  return `(function () {
+var cfg = ${cfg};
+var hit = function (list) { return list.some(function (s) { return new RegExp(s).test(location.href); }); };
+if ((cfg.match.length || cfg.include.length) && !hit(cfg.match) && !hit(cfg.include)) return;
+if (hit(cfg.exclude)) return;
+if (cfg.noframes && window !== window.top) return;
+var main = function () {
+${code}
+};
+if (cfg.runAt === "document-start") {
+  if (document.documentElement) main();
+  else {
+    var done = false;
+    var go = function () { if (done) return; done = true; main(); };
+    new MutationObserver(function (records, ob) {
+      if (document.documentElement) { ob.disconnect(); go(); }
+    }).observe(document, { childList: true });
+    document.addEventListener("DOMContentLoaded", go, { once: true });
+  }
+} else if (cfg.runAt === "document-end") {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", main, { once: true });
+  else main();
+} else {
+  var idle = function () {
+    if (window.requestIdleCallback) window.requestIdleCallback(function () { main(); }, { timeout: 3000 });
+    else setTimeout(main, 0);
+  };
+  if (document.readyState === "complete") idle();
+  else window.addEventListener("load", idle, { once: true });
+}
+})();`;
+}
+
+async function assembleScript(source) {
+  const meta = parseMetadata(source);
+  let code = source;
+  if (meta.require.length) {
+    const parts = [];
+    for (const url of meta.require) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`@require ${url}: HTTP ${res.status}`);
+      parts.push(await res.text());
+    }
+    code = parts.join("\n") + "\n" + source;
+  }
+  return {
+    id: createHash("sha256").update(source).digest("hex").slice(0, 12),
+    name: meta.name ?? "unnamed",
+    version: meta.version ?? "",
+    description: meta.description ?? "",
+    runAt: meta["run-at"] || "document-idle",
+    match: meta.match,
+    include: meta.include,
+    exclude: meta.exclude,
+    source,
+    injected: buildInjectedSource(meta, code),
+    addedAt: new Date().toISOString(),
+  };
+}
+
+// ---------- persistent state (userscripts + autoclose) ----------
+
+const STATE_FILE = process.env.BB_STATE_FILE || "/data/profile/bb-state.json";
+
+const state = {
+  scripts: [],
+  autoclose: { idleMinutes: 30, paused: false, pausedUntil: 0 },
+};
+try {
+  const saved = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  if (Array.isArray(saved.scripts)) state.scripts = saved.scripts;
+  if (saved.autoclose) Object.assign(state.autoclose, saved.autoclose);
+  log(`state loaded: ${state.scripts.length} userscript(s)`);
+} catch {}
+
+function saveState() {
+  try {
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    const tmp = STATE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, STATE_FILE);
+  } catch (e) {
+    log("state save failed:", e.message);
+  }
+}
 
 const app = new Hono();
 
@@ -31,6 +175,105 @@ app.get("/bb-mode", (c) => c.text(mode + "\n"));
 app.post("/bb-mode", async (c) => {
   setMode((await c.req.text()).trim() === "touch" ? "touch" : "cursor");
   return c.body(null, 204);
+});
+
+const scriptSummary = (s) => ({
+  id: s.id, name: s.name, version: s.version, description: s.description,
+  runAt: s.runAt, match: s.match, include: s.include, exclude: s.exclude,
+  addedAt: s.addedAt,
+});
+
+app.get("/bb-userscripts", (c) => c.json(state.scripts.map(scriptSummary)));
+
+app.get("/bb-userscripts/:id", (c) => {
+  const s = state.scripts.find((x) => x.id === c.req.param("id"));
+  return s ? c.json({ ...scriptSummary(s), source: s.source })
+           : c.json({ error: "not found" }, 404);
+});
+
+app.post("/bb-userscripts", async (c) => {
+  let source = await c.req.text();
+  try {
+    const j = JSON.parse(source);
+    if (j && typeof j.source === "string") source = j.source;
+  } catch {}
+  let rec;
+  try {
+    rec = await assembleScript(source);
+  } catch (e) {
+    return c.json({ error: e.message }, 400);
+  }
+  const existing = state.scripts.find((x) => x.id === rec.id);
+  if (!existing) {
+    state.scripts.push(rec);
+    saveState();
+    log("userscript added:", rec.name, rec.id);
+  }
+  for (const t of targets.values()) {
+    try { await applyScriptsToTarget(t); } catch {}
+  }
+  return c.json(scriptSummary(existing || rec), existing ? 200 : 201);
+});
+
+app.delete("/bb-userscripts/:id", async (c) => {
+  const id = c.req.param("id");
+  const i = state.scripts.findIndex((x) => x.id === id);
+  if (i === -1) return c.json({ error: "not found" }, 404);
+  state.scripts.splice(i, 1);
+  saveState();
+  log("userscript removed:", id);
+  for (const t of targets.values()) {
+    try { await removeScriptFromTarget(t, id); } catch {}
+  }
+  return c.body(null, 204);
+});
+
+function autocloseView() {
+  const ac = state.autoclose;
+  const now = Date.now();
+  return {
+    idleMinutes: ac.idleMinutes,
+    paused: !!(ac.paused || (ac.pausedUntil && ac.pausedUntil > now)),
+    pausedUntil: ac.pausedUntil ? new Date(ac.pausedUntil).toISOString() : null,
+    tabs: [...targets.entries()].map(([id, t]) => ({
+      id,
+      url: t.url || "",
+      title: t.title || "",
+      foreground: !!t.foreground,
+      lastForegroundAt: t.lastForegroundAt
+        ? new Date(t.lastForegroundAt).toISOString() : null,
+    })),
+  };
+}
+
+app.get("/bb-autoclose", (c) => c.json(autocloseView()));
+
+app.post("/bb-autoclose", async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "JSON body required" }, 400);
+  }
+  const ac = state.autoclose;
+  if (typeof body.idleMinutes === "number" && body.idleMinutes >= 0)
+    ac.idleMinutes = body.idleMinutes;
+  if (body.resume === true) {
+    ac.paused = false;
+    ac.pausedUntil = 0;
+  } else if (typeof body.pauseMinutes === "number" && body.pauseMinutes > 0) {
+    ac.paused = false;
+    ac.pausedUntil = Date.now() + body.pauseMinutes * 60000;
+  } else if (body.paused === true) {
+    ac.paused = true;
+    ac.pausedUntil = 0;
+  } else if (body.paused === false) {
+    ac.paused = false;
+    ac.pausedUntil = 0;
+  }
+  saveState();
+  log("autoclose updated:", JSON.stringify(state.autoclose));
+  return c.json(autocloseView());
 });
 
 // iOS Safari reuses a cached rfb.js module without revalidating; a stale one must not survive a deploy
@@ -160,9 +403,30 @@ function setMode(next) {
   applyAll().catch(() => {});
 }
 
+async function applyScriptsToTarget(t) {
+  if (!t.cdp) return;
+  for (const s of state.scripts) {
+    if (t.scripts.has(s.id)) continue;
+    const { identifier } = await t.cdp.send(
+      "Page.addScriptToEvaluateOnNewDocument", { source: s.injected });
+    t.scripts.set(s.id, identifier);
+  }
+}
+
+async function removeScriptFromTarget(t, scriptId) {
+  const identifier = t.scripts.get(scriptId);
+  if (!identifier) return;
+  t.scripts.delete(scriptId);
+  await t.cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+}
+
 async function watchTarget(tgt) {
   const ws = new WebSocket(tgt.webSocketDebuggerUrl);
-  const t = { cdp: null, applied: null };
+  const t = {
+    cdp: null, applied: null, scripts: new Map(),
+    url: tgt.url || "", title: tgt.title || "",
+    foreground: false, lastForegroundAt: Date.now(),
+  };
   targets.set(tgt.id, t);
   await new Promise((res, rej) => {
     ws.addEventListener("open", res, { once: true });
@@ -180,6 +444,7 @@ async function watchTarget(tgt) {
     if (targets.get(tgt.id) === t) targets.delete(tgt.id);
   });
   await t.cdp.send("Page.enable");
+  await applyScriptsToTarget(t);
   await applyEmulation(t, mode === "touch");
 }
 
@@ -199,7 +464,11 @@ async function pollTargets() {
     }
   }
   for (const tgt of pages) {
-    if (!targets.has(tgt.id)) {
+    const t = targets.get(tgt.id);
+    if (t) {
+      t.url = tgt.url || "";
+      t.title = tgt.title || "";
+    } else {
       try { await watchTarget(tgt); }
       catch (e) { log("watch failed:", e.message); targets.delete(tgt.id); }
     }
@@ -208,6 +477,51 @@ async function pollTargets() {
 
 setInterval(() => { pollTargets().catch(() => {}); }, 1500);
 pollTargets().catch(() => {});
+
+// ---------- autoclose: close tabs that have not been in front for a while ----------
+
+const FG_EXPR = "(() => { try { return document.visibilityState === \"visible\" || document.hasFocus(); } catch { return false; } })()";
+
+async function sweepAutoclose() {
+  const ac = state.autoclose;
+  const now = Date.now();
+  if (ac.pausedUntil && ac.pausedUntil <= now) {
+    ac.pausedUntil = 0;
+    saveState();
+    log("autoclose: pause expired, resumed");
+  }
+  for (const t of targets.values()) {
+    if (!t.cdp) continue;
+    try {
+      const r = await t.cdp.send("Runtime.evaluate",
+        { expression: FG_EXPR, returnByValue: true });
+      const fg = !!(r && r.result && r.result.value);
+      t.foreground = fg;
+      if (fg) t.lastForegroundAt = now;
+    } catch {}
+  }
+  if (!ac.idleMinutes || ac.idleMinutes <= 0) return;
+  if (ac.paused || (ac.pausedUntil && ac.pausedUntil > now)) return;
+  const pages = [...targets.entries()];
+  if (pages.length <= 1) return;
+  const stale = pages
+    .filter(([, t]) => !t.foreground
+      && now - (t.lastForegroundAt || now) > ac.idleMinutes * 60000)
+    .sort((a, b) => (a[1].lastForegroundAt || 0) - (b[1].lastForegroundAt || 0));
+  let remaining = pages.length;
+  for (const [id, t] of stale) {
+    if (remaining <= 1) break;
+    try {
+      await fetch(`${CDP_HTTP}/json/close/${id}`);
+      log("autoclose: closed", t.url || id);
+      remaining--;
+    } catch (e) {
+      log("autoclose close failed:", e.message);
+    }
+  }
+}
+
+setInterval(() => { sweepAutoclose().catch(() => {}); }, 15000);
 
 process.on("uncaughtException", e => log("uncaught:", e.message));
 process.on("unhandledRejection", e => log("unhandled:", String(e)));
