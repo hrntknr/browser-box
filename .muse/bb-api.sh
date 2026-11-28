@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # bb-api.sh - talk to the browser-box control API (port 6082) over HTTP.
 #
-# The API base URL comes from BB_API_URL (default http://localhost:6082).
-# Point it at wherever bb is reachable from your machine, e.g.
+# The control API is cluster-internal. The standard route is the sshmitm
+# SSH forward (see bb-tunnel.sh): run bb-tunnel.sh first, then this CLI
+# talks to the forwarded port on localhost. BB_API_URL overrides the
+# base URL for other setups, e.g.
 #   BB_API_URL=http://browser-box:6082   (inside the cluster / compose network)
-#   BB_API_URL=http://localhost:6082     (port-forwarded or local docker)
 #
 # Usage:
 #   bb-api.sh tabs                       autoclose view (tab ids, urls, neverClose)
@@ -28,7 +29,7 @@
 #   bb-api.sh events [since] [limit]     read the CDP event log (cursor = seq)
 set -euo pipefail
 
-API="${BB_API_URL:-http://localhost:6082}"
+API="${BB_API_URL:-http://localhost:16082}"
 
 get() { curl -s --max-time 20 "$API$1"; }
 del() { curl -s --max-time 20 -X DELETE -w ' HTTP %{http_code}\n' "$API$1"; }

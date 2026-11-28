@@ -7,15 +7,16 @@
 # hooks tool (add -> dry_run -> enable). The cursor lives in
 # ~/hooks/state/<HOOK_NAME>.cursor and is not advanced on dry runs.
 #
-# The control API is read over plain HTTP; BB_API_URL says where bb is
-# reachable from the machine running the hook.
+# The control API is read over plain HTTP via the sshmitm SSH forward:
+# bb-tunnel.sh (in .muse/) must be running on the machine running the
+# hook. BB_API_URL overrides where the API is read from.
 set -euo pipefail
 source "$HATCH_HOOK_RUNTIME"
 
 # ---- config (edit when instantiating) ----
 HOOK_NAME="cdp-events"
 SUBSCRIPTION_IDS="" # comma-separated subscription ids; empty = any subscription
-API="${BB_API_URL:-http://localhost:6082}"
+API="${BB_API_URL:-http://localhost:16082}"
 # ------------------------------------------
 
 STATE_DIR="$HOME/hooks/state"
