@@ -31,7 +31,7 @@ COPY entrypoint.sh /app/entrypoint.sh
 COPY package.json package-lock.json /app/
 RUN cd /app && npm ci --omit=dev --ignore-scripts
 COPY server.mjs /app/server.mjs
-COPY cdp-forward.mjs merge-preferences.mjs close-chrome.mjs /app/
+COPY cdp-forward.mjs merge-preferences.mjs close-chrome.mjs events.mjs /app/
 EXPOSE 9222 6080
 
 CMD ["/bin/sh", "/app/entrypoint.sh"]

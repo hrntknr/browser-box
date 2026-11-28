@@ -6,6 +6,7 @@ import path from "node:path";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { initEventWatcher } from "./events.mjs";
 
 const WEB_ROOT = "/usr/share/novnc";
 const HTTP_HOST = process.env.NOVNC_BIND || "127.0.0.1";
@@ -140,11 +141,13 @@ const STATE_FILE = process.env.BB_STATE_FILE || "/data/profile/bb-state.json";
 const state = {
   scripts: [],
   autoclose: { idleMinutes: 360, paused: false, pausedUntil: 0, tabs: {} },
+  subscriptions: [],
 };
 try {
   const saved = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
   if (Array.isArray(saved.scripts)) state.scripts = saved.scripts;
   if (saved.autoclose) Object.assign(state.autoclose, saved.autoclose);
+  if (Array.isArray(saved.subscriptions)) state.subscriptions = saved.subscriptions;
   log(`state loaded: ${state.scripts.length} userscript(s)`);
 } catch {}
 if (!state.autoclose.tabs || typeof state.autoclose.tabs !== "object")
@@ -341,6 +344,9 @@ control.delete("/bb/autoclose/tabs/:id", (c) => {
   log("autoclose tab exclusion removed:", id);
   return c.body(null, 204);
 });
+
+// CDP event subscriptions + event log (see events.mjs)
+initEventWatcher({ state, saveState, control, log, cdpHttp: CDP_HTTP });
 
 // iOS Safari reuses a cached rfb.js module without revalidating; a stale one must not survive a deploy
 const noStore = (_path, c) => c.header("Cache-Control", "no-store");
