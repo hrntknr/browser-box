@@ -18,7 +18,8 @@ NS="${BB_NAMESPACE:-browser-box}"
 API="http://browser-box:6082"
 
 # run_job <inner shell command>
-# BB_BODY, if set, is exposed to the command as $BODY_B64 (base64).
+# The command travels base64-encoded in an env var, so quoting never leaks
+# into the manifest. BB_BODY, if set, is exposed as $BODY_B64 (base64).
 run_job() {
   local name="bb-api-$RANDOM$RANDOM"
   local manifest out
@@ -38,12 +39,14 @@ run_job() {
     echo "      containers:"
     echo "        - name: api"
     echo "          image: curlimages/curl:8.10.1"
+    echo "          env:"
+    echo "            - name: CMD_B64"
+    printf '              value: %s\n' "$(printf '%s' "$1" | base64 -w0)"
     if [ -n "${BB_BODY:-}" ]; then
-      echo "          env:"
       echo "            - name: BODY_B64"
-      echo "              value: $(printf '%s' "$BB_BODY" | base64 -w0)"
+      printf '              value: %s\n' "$(printf '%s' "$BB_BODY" | base64 -w0)"
     fi
-    printf '          command: ["sh", "-c", "%s"]\n' "$1"
+    echo '          command: ["sh", "-c", "printf %s \"$CMD_B64\" | base64 -d > /tmp/cmd.sh && sh /tmp/cmd.sh"]'
   } > "$manifest"
   "$KUBECTL" apply -f "$manifest" >/dev/null
   rm -f "$manifest"
